@@ -119,6 +119,9 @@ add_library(sg_engine STATIC
     src/PostEq.cpp
     src/IrLoader.cpp
     src/NamProcessor.cpp
+    src/Screamer.cpp
+    src/StereoDelay.cpp
+    src/PlateReverb.cpp
 )
 
 target_include_directories(sg_engine

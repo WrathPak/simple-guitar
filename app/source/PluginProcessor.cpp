@@ -23,6 +23,37 @@ namespace
                 return std::log (value / start) / std::log (end / start);
             });
     }
+
+    // Chain-order <-> apvts.state property text, e.g. "screamer,echoes,chamber".
+    // Same spirit as namModelPath/irPath: a plain comma-joined string property
+    // on apvts.state, restored via restoreLoadedPathsFromState().
+    juce::String chainOrderToString (const sg::PedalOrder& order)
+    {
+        juce::StringArray ids;
+        for (auto slot : order)
+            ids.add (SimpleGuitarAudioProcessor::pedalIdForSlot (slot));
+        return ids.joinIntoString (",");
+    }
+
+    bool parseChainOrderString (const juce::String& text, sg::PedalOrder& outOrder)
+    {
+        const auto ids = juce::StringArray::fromTokens (text, ",", "");
+        if (ids.size() != sg::numPedalSlots)
+            return false;
+
+        sg::PedalOrder order {};
+        for (int i = 0; i < sg::numPedalSlots; ++i)
+        {
+            if (! SimpleGuitarAudioProcessor::pedalSlotForId (ids[i], order[(std::size_t) i]))
+                return false;
+        }
+
+        if (! sg::isValidPedalOrder (order))
+            return false;
+
+        outOrder = order;
+        return true;
+    }
 }
 
 SimpleGuitarAudioProcessor::SimpleGuitarAudioProcessor()
@@ -43,14 +74,31 @@ SimpleGuitarAudioProcessor::SimpleGuitarAudioProcessor()
     cabOnParam = apvts.getRawParameterValue (cabOnParamId);
     cabLowCutHzParam = apvts.getRawParameterValue (cabLowCutHzParamId);
     cabHighCutHzParam = apvts.getRawParameterValue (cabHighCutHzParamId);
+    screamerOnParam = apvts.getRawParameterValue (screamerOnParamId);
+    screamerDriveParam = apvts.getRawParameterValue (screamerDriveParamId);
+    screamerToneParam = apvts.getRawParameterValue (screamerToneParamId);
+    screamerLevelParam = apvts.getRawParameterValue (screamerLevelParamId);
+    echoesOnParam = apvts.getRawParameterValue (echoesOnParamId);
+    echoesTimeParam = apvts.getRawParameterValue (echoesTimeParamId);
+    echoesFeedbackParam = apvts.getRawParameterValue (echoesFeedbackParamId);
+    echoesMixParam = apvts.getRawParameterValue (echoesMixParamId);
+    chamberOnParam = apvts.getRawParameterValue (chamberOnParamId);
+    chamberDecayParam = apvts.getRawParameterValue (chamberDecayParamId);
+    chamberToneParam = apvts.getRawParameterValue (chamberToneParamId);
+    chamberMixParam = apvts.getRawParameterValue (chamberMixParamId);
 
     // Message-thread work: make sure the managed library folders exist from
     // the moment the plugin is instantiated, so the first rigState the UI
     // asks for already has somewhere to scan.
     sg::ensureLibraryFoldersExist();
+
+    startTimerHz (latencyRefreshHz);
 }
 
-SimpleGuitarAudioProcessor::~SimpleGuitarAudioProcessor() = default;
+SimpleGuitarAudioProcessor::~SimpleGuitarAudioProcessor()
+{
+    stopTimer();
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout SimpleGuitarAudioProcessor::createParameterLayout()
 {
@@ -134,6 +182,80 @@ juce::AudioProcessorValueTreeState::ParameterLayout SimpleGuitarAudioProcessor::
         8000.0f,
         juce::AudioParameterFloatAttributes().withLabel ("Hz")));
 
+    // Floor pedals. The nine continuous params below are plain 0..1
+    // normalized floats end to end -- no dB/Hz range like the M1 rig params
+    // above, since sg::Screamer/StereoDelay/PlateReverb take normalized
+    // setters directly and own the real-unit mapping internally (see
+    // engine/include/sg/{Screamer,StereoDelay,PlateReverb}.h).
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { screamerOnParamId, 1 },
+        "Screamer",
+        false));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { screamerDriveParamId, 1 },
+        "Screamer Drive",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+        0.5f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { screamerToneParamId, 1 },
+        "Screamer Tone",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+        0.5f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { screamerLevelParamId, 1 },
+        "Screamer Level",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+        0.7f));
+
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { echoesOnParamId, 1 },
+        "Echoes",
+        true));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { echoesTimeParamId, 1 },
+        "Echoes Time",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+        0.5f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { echoesFeedbackParamId, 1 },
+        "Echoes Feedback",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+        0.4f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { echoesMixParamId, 1 },
+        "Echoes Mix",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+        0.25f));
+
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { chamberOnParamId, 1 },
+        "Chamber",
+        true));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { chamberDecayParamId, 1 },
+        "Chamber Decay",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+        0.5f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { chamberToneParamId, 1 },
+        "Chamber Tone",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+        0.5f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { chamberMixParamId, 1 },
+        "Chamber Mix",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+        0.22f));
+
     return { params.begin(), params.end() };
 }
 
@@ -143,11 +265,18 @@ void SimpleGuitarAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
 
     inputTrimGain.prepare (sampleRate, samplesPerBlock, numChannels);
     gate.prepare (sampleRate, samplesPerBlock, numChannels);
+    screamer.prepare (sampleRate, samplesPerBlock, numChannels);
+    echoes.prepare (sampleRate, samplesPerBlock, numChannels);
+    chamber.prepare (sampleRate, samplesPerBlock, numChannels);
     nam.prepare (sampleRate, samplesPerBlock);
     postEq.prepare (sampleRate, samplesPerBlock, numChannels);
     cab.prepare (sampleRate, samplesPerBlock, numChannels);
     outputGainStage.prepare (sampleRate, samplesPerBlock, numChannels);
     meterTap.reset();
+
+    // Screamer's latency (getLatencySamples()) is only valid once prepare()
+    // has run; refresh the reported host latency now that it is.
+    updateReportedLatency();
 }
 
 void SimpleGuitarAudioProcessor::releaseResources()
@@ -190,6 +319,15 @@ void SimpleGuitarAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     gate.setThresholdDb (gateThresholdDbParam->load (std::memory_order_relaxed));
     gate.process (buffer);
 
+    // 2.5. Floor pedals, in the current chain order. A single relaxed atomic
+    // load of the packed order, then a fixed-size loop -- glitch-free,
+    // allocation-free reordering (see ChainOrder.h / PluginProcessor.h).
+    {
+        const auto order = getChainOrder();
+        for (auto slot : order)
+            processPedalSlot (slot, buffer);
+    }
+
     // 3. NAM amp.
     nam.setNormalize (namNormalizeParam->load (std::memory_order_relaxed) >= 0.5f);
     nam.process (buffer);
@@ -216,6 +354,90 @@ void SimpleGuitarAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     // 7. Meter tap (post-chain).
     meterTap.pushBlock (buffer.getArrayOfReadPointers(), buffer.getNumChannels(), buffer.getNumSamples());
+}
+
+void SimpleGuitarAudioProcessor::processPedalSlot (sg::PedalSlot slot, juce::AudioBuffer<float>& buffer) noexcept
+{
+    switch (slot)
+    {
+        case sg::PedalSlot::screamer:
+            screamer.setEnabled (screamerOnParam->load (std::memory_order_relaxed) >= 0.5f);
+            screamer.setDrive (screamerDriveParam->load (std::memory_order_relaxed));
+            screamer.setTone (screamerToneParam->load (std::memory_order_relaxed));
+            screamer.setLevel (screamerLevelParam->load (std::memory_order_relaxed));
+            screamer.process (buffer);
+            break;
+
+        case sg::PedalSlot::echoes:
+            echoes.setEnabled (echoesOnParam->load (std::memory_order_relaxed) >= 0.5f);
+            echoes.setTime (echoesTimeParam->load (std::memory_order_relaxed));
+            echoes.setFeedback (echoesFeedbackParam->load (std::memory_order_relaxed));
+            echoes.setMix (echoesMixParam->load (std::memory_order_relaxed));
+            echoes.process (buffer);
+            break;
+
+        case sg::PedalSlot::chamber:
+            chamber.setEnabled (chamberOnParam->load (std::memory_order_relaxed) >= 0.5f);
+            chamber.setDecay (chamberDecayParam->load (std::memory_order_relaxed));
+            chamber.setTone (chamberToneParam->load (std::memory_order_relaxed));
+            chamber.setMix (chamberMixParam->load (std::memory_order_relaxed));
+            chamber.process (buffer);
+            break;
+    }
+}
+
+void SimpleGuitarAudioProcessor::updateReportedLatency()
+{
+    // Screamer is the only pedal that adds latency (fixed once prepare() has
+    // run); its contribution is order-independent (serial-chain latencies
+    // just sum), so this doesn't need to know the current chain order, only
+    // whether it's switched on.
+    const bool screamerOn = screamerOnParam->load (std::memory_order_relaxed) >= 0.5f;
+    const int newLatency = screamerOn ? screamer.getLatencySamples() : 0;
+
+    if (newLatency != getLatencySamples())
+        setLatencySamples (newLatency);
+}
+
+void SimpleGuitarAudioProcessor::timerCallback()
+{
+    // Low-rate message-thread poll for screamerOn changes -- see the
+    // class-level comment in PluginProcessor.h for why this can't be a
+    // parameter listener (JUCE may invoke those from the audio thread for
+    // host automation) and must instead be a message-thread refresh that
+    // works whether or not an editor/WebviewBridge exists.
+    updateReportedLatency();
+}
+
+bool SimpleGuitarAudioProcessor::setChainOrder (const sg::PedalOrder& order)
+{
+    if (! sg::storePedalOrder (chainOrderAtomic, order))
+        return false;
+
+    apvts.state.setProperty (chainOrderPropertyId, chainOrderToString (order), nullptr);
+    return true;
+}
+
+const char* SimpleGuitarAudioProcessor::pedalIdForSlot (sg::PedalSlot slot) noexcept
+{
+    switch (slot)
+    {
+        case sg::PedalSlot::screamer: return "screamer";
+        case sg::PedalSlot::echoes:   return "echoes";
+        case sg::PedalSlot::chamber:  return "chamber";
+    }
+    return "screamer";
+}
+
+bool SimpleGuitarAudioProcessor::pedalSlotForId (juce::StringRef id, sg::PedalSlot& outSlot) noexcept
+{
+    const juce::String idString (id);
+
+    if (idString == "screamer") { outSlot = sg::PedalSlot::screamer; return true; }
+    if (idString == "echoes")   { outSlot = sg::PedalSlot::echoes; return true; }
+    if (idString == "chamber")  { outSlot = sg::PedalSlot::chamber; return true; }
+
+    return false;
 }
 
 juce::AudioProcessorEditor* SimpleGuitarAudioProcessor::createEditor()
@@ -356,6 +578,17 @@ void SimpleGuitarAudioProcessor::restoreLoadedPathsFromState()
 
     if (irPath.isNotEmpty() && irPath != currentIrPath)
         requestLoadIr (irPath, nullptr);
+
+    // Chain order: the state tree already carries the persisted value
+    // verbatim (it just came in via apvts.replaceState()), so this only
+    // needs to update the audio-thread-visible atomic, not re-persist it.
+    // An empty/missing/corrupt property leaves the atomic at whatever it
+    // already was (the default template order, for a first load).
+    const auto chainOrderText = apvts.state.getProperty (chainOrderPropertyId, "").toString();
+    sg::PedalOrder restoredOrder {};
+
+    if (chainOrderText.isNotEmpty() && parseChainOrderString (chainOrderText, restoredOrder))
+        sg::storePedalOrder (chainOrderAtomic, restoredOrder);
 }
 
 // This creates new instances of the plugin.

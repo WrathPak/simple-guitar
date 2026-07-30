@@ -3,12 +3,14 @@ import {
   sendLoadIr,
   sendLoadNamModel,
   sendRequestRigState,
+  sendSetChainOrder,
   subscribeLoadResult,
   subscribeMeterFrame,
   subscribeRigState,
   useParam,
   type LoadResult,
   type MeterFrame,
+  type ParamHandle,
   type RigState,
 } from "../bridge";
 import { AmpDevice } from "./AmpDevice";
@@ -27,7 +29,7 @@ import {
   defaultNormalizedForLogHz,
   isParamOn,
 } from "./paramMath";
-import { DEMO_PEDALS } from "./pedalDefs";
+import { PEDAL_DEFS_BY_ID, type PedalDef } from "./pedalDefs";
 import { PedalDevice } from "./PedalDevice";
 import { PedalRow, type PedalRowState } from "./PedalRow";
 import "./Room.css";
@@ -36,12 +38,17 @@ const OUTPUT_DEFAULT_VALUE = 0.75;
 const CAB_LOW_CUT_DEFAULT = defaultNormalizedForLogHz(CAB_LOW_CUT_RANGE);
 const CAB_HIGH_CUT_DEFAULT = defaultNormalizedForLogHz(CAB_HIGH_CUT_RANGE);
 
+/** The fixed template order (screamer, echoes, chamber) -- matches the
+    engine's own default (see app/source/ChainOrder.h::defaultPedalOrder). */
+const DEFAULT_CHAIN_ORDER = ["screamer", "echoes", "chamber"];
+
 const EMPTY_RIG_STATE: RigState = {
   type: "rigState",
-  schemaVersion: 1,
+  schemaVersion: 2,
   namModelName: null,
   namModelSampleRate: 0,
   irName: null,
+  chainOrder: DEFAULT_CHAIN_ORDER as RigState["chainOrder"],
   library: { models: [], irs: [] },
 };
 
@@ -76,6 +83,30 @@ export function Room() {
   const gateOn = useParam("gateOn", 0);
   const gateThresholdDb = useParam("gateThresholdDb", GATE_THRESHOLD_DEFAULT_NORMALIZED);
 
+  // The three floor pedals' 12 params (on/off + 3 knobs each). Same
+  // subscribe-up-front convention as the M1 params above -- see pedalDefs.ts
+  // for the paramId/defaultValue each knob binds to.
+  const screamerOn = useParam("screamerOn", PEDAL_DEFS_BY_ID.screamer.onDefault);
+  const screamerDrive = useParam("screamerDrive", PEDAL_DEFS_BY_ID.screamer.knobs[0].defaultValue);
+  const screamerTone = useParam("screamerTone", PEDAL_DEFS_BY_ID.screamer.knobs[1].defaultValue);
+  const screamerLevel = useParam("screamerLevel", PEDAL_DEFS_BY_ID.screamer.knobs[2].defaultValue);
+  const echoesOn = useParam("echoesOn", PEDAL_DEFS_BY_ID.echoes.onDefault);
+  const echoesTime = useParam("echoesTime", PEDAL_DEFS_BY_ID.echoes.knobs[0].defaultValue);
+  const echoesFeedback = useParam("echoesFeedback", PEDAL_DEFS_BY_ID.echoes.knobs[1].defaultValue);
+  const echoesMix = useParam("echoesMix", PEDAL_DEFS_BY_ID.echoes.knobs[2].defaultValue);
+  const chamberOn = useParam("chamberOn", PEDAL_DEFS_BY_ID.chamber.onDefault);
+  const chamberDecay = useParam("chamberDecay", PEDAL_DEFS_BY_ID.chamber.knobs[0].defaultValue);
+  const chamberTone = useParam("chamberTone", PEDAL_DEFS_BY_ID.chamber.knobs[1].defaultValue);
+  const chamberMix = useParam("chamberMix", PEDAL_DEFS_BY_ID.chamber.knobs[2].defaultValue);
+
+  // Lookup from pedal id -> its live param handles, for rendering/toggling
+  // whichever pedal the chain order or focus currently names.
+  const pedalParams: Record<string, { on: ParamHandle; knobs: [ParamHandle, ParamHandle, ParamHandle] }> = {
+    screamer: { on: screamerOn, knobs: [screamerDrive, screamerTone, screamerLevel] },
+    echoes: { on: echoesOn, knobs: [echoesTime, echoesFeedback, echoesMix] },
+    chamber: { on: chamberOn, knobs: [chamberDecay, chamberTone, chamberMix] },
+  };
+
   const [rigState, setRigState] = useState<RigState>(EMPTY_RIG_STATE);
   const [loadResult, setLoadResult] = useState<LoadResult | null>(null);
   const [overlayKind, setOverlayKind] = useState<OverlayKind>(null);
@@ -83,9 +114,17 @@ export function Room() {
   const [inMeter, setInMeter] = useState({ peakDb: METER_MIN_DB, holdDb: METER_MIN_DB });
   const [outMeter, setOutMeter] = useState({ peakDb: METER_MIN_DB, holdDb: METER_MIN_DB });
 
-  const [pedals, setPedals] = useState<PedalRowState[]>(() =>
-    DEMO_PEDALS.map((pedal) => ({ ...pedal, bypassed: pedal.defaultBypassed })),
-  );
+  // The floor's left-to-right / signal order comes straight from the engine
+  // (rigState.chainOrder) -- there is no local-only order state, so a DAW
+  // session restore (or host automation of the order, if that ever existed)
+  // rearranges the floor for free, and a drag-reorder's commit point
+  // (reorderPedals below) only ever *asks* the engine for a new order; the
+  // floor updates once that round-trips back via the next rigState.
+  const pedals: PedalRowState[] = rigState.chainOrder
+    .map((id) => PEDAL_DEFS_BY_ID[id] as PedalDef | undefined)
+    .filter((def): def is PedalDef => def !== undefined)
+    .map((def) => ({ ...def, bypassed: !isParamOn(pedalParams[def.id].on.value) }));
+
   const [focus, setFocus] = useState<FocusTarget>(null);
 
   // Cable geometry: read live off the DOM, never hardcoded. `jacksRef` and
@@ -118,23 +157,21 @@ export function Room() {
   }, [focus, overlayKind]);
 
   const toggleBypass = (id: string) => {
-    setPedals((prev) => prev.map((p) => (p.id === id ? { ...p, bypassed: !p.bypassed } : p)));
+    const params = pedalParams[id];
+    if (!params) return;
+    params.on.setValue(isParamOn(params.on.value) ? 0 : 1);
   };
 
   /**
    * Commits a new left-to-right chain order (drag drop or keyboard swap).
-   * The order lives here as a plain list of ids — the one place it's
-   * authoritative — so the pedal row and the cable layer both just derive
-   * their layout from it. Audio is a fixed passthrough for now; once the
-   * real chain lands this is the one spot that would also send an
-   * order-changed message across the bridge.
+   * The order itself isn't held locally -- this just asks the engine to
+   * apply it (setChainOrder), and the floor re-renders once the new order
+   * comes back on the next rigState (see `pedals` above). Both the real
+   * bridge and the dev fallback apply + echo it synchronously, so there's
+   * no visible round-trip delay in practice.
    */
   const reorderPedals = (order: string[]) => {
-    setPedals((prev) => {
-      const byId = new Map(prev.map((p) => [p.id, p]));
-      const next = order.map((id) => byId.get(id)).filter((p): p is PedalRowState => p !== undefined);
-      return next.length === prev.length ? next : prev;
-    });
+    sendSetChainOrder(order);
   };
 
   const closeOverlay = () => setOverlayKind(null);
@@ -203,6 +240,7 @@ export function Room() {
             bypassed={focusedPedal.bypassed}
             focused
             onToggleBypass={() => toggleBypass(focusedPedal.id)}
+            knobs={pedalParams[focusedPedal.id].knobs}
           />
         )}
       </div>

@@ -39,6 +39,14 @@
          RigLibrary.h); anything else is rejected with a loadResult{ok:false}
          and no load is attempted.
 
+    JS -> native, channel "setChainOrder": { type: "setChainOrder", order: [pedalId, pedalId, pedalId] }
+      -- order must be exactly a permutation of "screamer"/"echoes"/"chamber";
+         anything else (wrong length, duplicate, unknown id) is silently
+         rejected -- no state change, no loadResult, no rigState reply. On
+         success the new order is applied to the audio thread immediately
+         (see PluginProcessor::setChainOrder(), glitch-free/allocation-free)
+         and echoed back on the next "rigState".
+
     native -> JS, channel "loadResult":
       { type: "loadResult", kind: "nam" | "ir", ok: boolean, message: string }
       -- sent once a loadNamModel/loadIr request (valid or rejected) has been
@@ -47,9 +55,11 @@
     native -> JS, channel "rigState":
       { type: "rigState", schemaVersion, namModelName: string|null,
         namModelSampleRate: number, irName: string|null,
+        chainOrder: [pedalId, pedalId, pedalId],
         library: { models: [{name,path}], irs: [{name,path}] } }
-      -- sent on page load, after any load request resolves, and in reply to
-         "requestRigState". Rescans the library folders each time.
+      -- sent on page load, after any load request or setChainOrder resolves,
+         and in reply to "requestRigState". Rescans the library folders each
+         time.
 
     See schema/bridge.schema.json for the authoritative message shapes.
 */
@@ -63,12 +73,13 @@ public:
     static constexpr const char* loadNamModelChannelId = "loadNamModel";
     static constexpr const char* loadIrChannelId = "loadIr";
     static constexpr const char* requestRigStateChannelId = "requestRigState";
+    static constexpr const char* setChainOrderChannelId = "setChainOrder";
     static constexpr const char* rigStateChannelId = "rigState";
     static constexpr const char* loadResultChannelId = "loadResult";
 
     /** Bridge protocol version, carried on every rigState message (see
         schema/bridge.schema.json SchemaVersion). */
-    static constexpr int schemaVersion = 1;
+    static constexpr int schemaVersion = 2;
 
     /** Registers the valueChanged/gestureStart/gestureEnd listener for every
         param channel plus the loadNamModel/loadIr/requestRigState command
@@ -87,6 +98,7 @@ private:
     void handleLoadNamModel (const juce::var& event);
     void handleLoadIr (const juce::var& event);
     void handleRequestRigState (const juce::var& event);
+    void handleSetChainOrder (const juce::var& event);
 
     void pushParamValueToUi (int paramIndex);
     void sendRigState();

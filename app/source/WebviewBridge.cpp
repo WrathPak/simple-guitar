@@ -55,6 +55,7 @@ juce::WebBrowserComponent::Options WebviewBridge::attachListenersTo (juce::WebBr
     opts = opts.withEventListener (loadNamModelChannelId, [this] (const juce::var& event) { handleLoadNamModel (event); });
     opts = opts.withEventListener (loadIrChannelId, [this] (const juce::var& event) { handleLoadIr (event); });
     opts = opts.withEventListener (requestRigStateChannelId, [this] (const juce::var& event) { handleRequestRigState (event); });
+    opts = opts.withEventListener (setChainOrderChannelId, [this] (const juce::var& event) { handleSetChainOrder (event); });
 
     return opts;
 }
@@ -165,6 +166,33 @@ void WebviewBridge::handleRequestRigState (const juce::var&)
     sendRigState();
 }
 
+void WebviewBridge::handleSetChainOrder (const juce::var& event)
+{
+    auto* obj = event.getDynamicObject();
+    if (obj == nullptr)
+        return;
+
+    const auto orderVar = obj->getProperty ("order");
+    if (! orderVar.isArray())
+        return;
+
+    const auto* orderArray = orderVar.getArray();
+    if (orderArray == nullptr || orderArray->size() != sg::numPedalSlots)
+        return; // malformed -- silently rejected, per the wire contract.
+
+    sg::PedalOrder order {};
+    for (int i = 0; i < sg::numPedalSlots; ++i)
+    {
+        if (! SimpleGuitarAudioProcessor::pedalSlotForId ((*orderArray)[i].toString(), order[(std::size_t) i]))
+            return; // unknown pedal id -- silently rejected.
+    }
+
+    if (! processor.setChainOrder (order))
+        return; // not a permutation (e.g. a duplicate) -- silently rejected.
+
+    sendRigState();
+}
+
 void WebviewBridge::attachBrowser (juce::WebBrowserComponent* browserToUse)
 {
     browser = browserToUse;
@@ -213,12 +241,17 @@ void WebviewBridge::sendRigState()
     auto& nam = processor.getNam();
     auto& cab = processor.getCab();
 
+    juce::Array<juce::var> chainOrderArray;
+    for (auto slot : processor.getChainOrder())
+        chainOrderArray.add (juce::String (SimpleGuitarAudioProcessor::pedalIdForSlot (slot)));
+
     juce::DynamicObject::Ptr obj (new juce::DynamicObject());
     obj->setProperty (typeKey, "rigState");
     obj->setProperty ("schemaVersion", schemaVersion);
     obj->setProperty ("namModelName", nam.isLoaded() ? juce::var (nam.getModelName()) : juce::var());
     obj->setProperty ("namModelSampleRate", nam.getModelSampleRate());
     obj->setProperty ("irName", cab.isLoaded() ? juce::var (cab.getIrName()) : juce::var());
+    obj->setProperty ("chainOrder", juce::var (chainOrderArray));
     obj->setProperty ("library", juce::var (libraryObj.get()));
 
     browser->emitEventIfBrowserIsVisible (rigStateChannelId, obj.get());

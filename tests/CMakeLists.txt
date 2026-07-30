@@ -26,12 +26,25 @@ add_executable(sg_tests
   engine/PostEqTest.cpp
   engine/IrLoaderTest.cpp
   engine/NamTest.cpp
+  engine/ScreamerTest.cpp
+  engine/StereoDelayTest.cpp
+  engine/PlateReverbTest.cpp
+  app/ChainOrderTest.cpp
 )
 
 target_link_libraries(sg_tests
   PRIVATE
     sg_engine          # brings juce_audio_basics / juce_dsp / juce_events etc. transitively (PUBLIC deps of sg_engine)
     Catch2::Catch2WithMain
+)
+
+# app/ChainOrderTest.cpp exercises app/source/ChainOrder.h directly -- it's a
+# pure, JUCE-free header (packing/permutation-validation only), so this test
+# binary includes it straight from app/source/ rather than linking the whole
+# app target (which pulls in juce_gui_extra/webview deps sg_tests has no
+# business depending on).
+target_include_directories(sg_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../app/source
 )
 
 target_compile_features(sg_tests PRIVATE cxx_std_20)

@@ -1,27 +1,49 @@
 import { getJuceBackend, isJuceHost } from "./juceClient";
-import type { LibraryEntry, LoadResult, RigState } from "../../../schema/gen/ts/bridge";
+import type { ChainOrder, LibraryEntry, LoadResult, PedalId, RigState } from "../../../schema/gen/ts/bridge";
 
 /**
- * Wire contract for the rig library (NAM models + cab IRs) and their
- * load/select flow, matching app/source/WebviewBridge.h:
+ * Wire contract for the rig library (NAM models + cab IRs), the floor pedal
+ * chain order, and their load/select/reorder flow, matching
+ * app/source/WebviewBridge.h:
  *
  *   JS   -> native, channel "loadNamModel":    { type: "loadNamModel", path }
  *   JS   -> native, channel "loadIr":          { type: "loadIr", path }
  *   JS   -> native, channel "requestRigState": { type: "requestRigState" }
+ *   JS   -> native, channel "setChainOrder":   { type: "setChainOrder", order }
  *   native -> JS,   channel "rigState":  RigState (schema/gen/ts/bridge.ts)
  *   native -> JS,   channel "loadResult": LoadResult
  *
- * `rigState` arrives unprompted on page load and after every load request
- * resolves (success or failure), and also in direct reply to
- * "requestRigState". `path` sent to loadNamModel/loadIr must come from a
- * `rigState.library` entry verbatim -- the engine rejects anything else.
+ * `rigState` arrives unprompted on page load and after every load request or
+ * setChainOrder resolves (success or failure/rejection), and also in direct
+ * reply to "requestRigState". `path` sent to loadNamModel/loadIr must come
+ * from a `rigState.library` entry verbatim -- the engine rejects anything
+ * else. `order` sent to setChainOrder must be exactly a permutation of the
+ * three PedalIds -- an invalid order is silently rejected (no state change,
+ * no reply) both by the engine and by this module's own dev fallback, so
+ * Room only ever needs to derive its floor layout from `rigState.chainOrder`,
+ * never from a locally-optimistic order.
  */
 
 const LOAD_NAM_MODEL_CHANNEL = "loadNamModel";
 const LOAD_IR_CHANNEL = "loadIr";
 const REQUEST_RIG_STATE_CHANNEL = "requestRigState";
+const SET_CHAIN_ORDER_CHANNEL = "setChainOrder";
 const RIG_STATE_CHANNEL = "rigState";
 const LOAD_RESULT_CHANNEL = "loadResult";
+
+const PEDAL_IDS: readonly PedalId[] = ["screamer", "echoes", "chamber"];
+
+/** True if `order` is exactly a permutation of the three pedal ids -- the same validation the engine performs (see app/source/ChainOrder.h's isValidPedalOrder). */
+export function isValidChainOrder(order: readonly string[]): order is ChainOrder {
+  if (order.length !== PEDAL_IDS.length) return false;
+  const seen = new Set<string>();
+  for (const id of order) {
+    if (!(PEDAL_IDS as readonly string[]).includes(id)) return false;
+    if (seen.has(id)) return false;
+    seen.add(id);
+  }
+  return true;
+}
 
 function isRigState(data: unknown): data is RigState {
   return typeof data === "object" && data !== null && (data as { type?: unknown }).type === "rigState";
@@ -74,18 +96,22 @@ const DEV_LIBRARY: { models: LibraryEntry[]; irs: LibraryEntry[] } = {
 const DEV_LOAD_LATENCY_MS = 300;
 const DEV_MODEL_SAMPLE_RATE = 48000;
 
+const DEV_DEFAULT_CHAIN_ORDER: ChainOrder = ["screamer", "echoes", "chamber"];
+
 let devNamModelName: string | null = null;
 let devIrName: string | null = null;
+let devChainOrder: ChainOrder = DEV_DEFAULT_CHAIN_ORDER;
 const devRigListeners = new Set<(state: RigState) => void>();
 const devLoadResultListeners = new Set<(result: LoadResult) => void>();
 
 function buildDevRigState(): RigState {
   return {
     type: "rigState",
-    schemaVersion: 1,
+    schemaVersion: 2,
     namModelName: devNamModelName,
     namModelSampleRate: devNamModelName ? DEV_MODEL_SAMPLE_RATE : 0,
     irName: devIrName,
+    chainOrder: devChainOrder,
     library: { models: DEV_LIBRARY.models, irs: DEV_LIBRARY.irs },
   };
 }
@@ -108,6 +134,12 @@ function subscribeDevLoadResult(listener: (result: LoadResult) => void): () => v
 }
 
 function devRequestRigState(): void {
+  notifyDevRigState();
+}
+
+function devSetChainOrder(order: readonly string[]): void {
+  if (!isValidChainOrder(order)) return; // silently rejected, same as the engine.
+  devChainOrder = order;
   notifyDevRigState();
 }
 
@@ -158,4 +190,17 @@ export function sendLoadIr(path: string): void {
 export function sendRequestRigState(): void {
   if (isJuceHost()) getJuceBackend()!.emitEvent(REQUEST_RIG_STATE_CHANNEL, { type: "requestRigState" });
   else devRequestRigState();
+}
+
+/**
+ * Commits a new floor pedal chain order (e.g. after a drag-reorder or
+ * keyboard swap gesture). `order` must be exactly a permutation of the three
+ * pedal ids -- an invalid order is silently dropped (not even sent to the
+ * engine) rather than emitted and rejected server-side, since there's
+ * nothing useful to do with the rejection either way.
+ */
+export function sendSetChainOrder(order: readonly string[]): void {
+  if (!isValidChainOrder(order)) return;
+  if (isJuceHost()) getJuceBackend()!.emitEvent(SET_CHAIN_ORDER_CHANNEL, { type: "setChainOrder", order });
+  else devSetChainOrder(order);
 }

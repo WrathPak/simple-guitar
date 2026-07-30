@@ -6,7 +6,7 @@
  */
 
 /**
- * Simple Guitar C++ <-> React bridge protocol, v1. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
+ * Simple Guitar C++ <-> React bridge protocol, v2. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
  *
  * Union of every message that can cross the bridge in either direction, discriminated by the `type` field.
  */
@@ -14,9 +14,9 @@ export type BridgeMessage = UiToEngineMessage | EngineToUiMessage;
 /**
  * Union of every message the React UI may send to the C++ engine.
  */
-export type UiToEngineMessage = SetParam | LoadNamModel | LoadIr | RequestRigState;
+export type UiToEngineMessage = SetParam | LoadNamModel | LoadIr | RequestRigState | SetChainOrder;
 /**
- * Identifiers for host-automatable parameters exposed by the engine's APVTS. M1 adds the gate/amp/cab rig params; new params are added here first.
+ * Identifiers for host-automatable parameters exposed by the engine's APVTS. M1 adds the gate/amp/cab rig params; M2 adds the three floor pedals (screamer/echoes/chamber). New params are added here first.
  */
 export type ParamId =
   | "outputGain"
@@ -30,11 +30,34 @@ export type ParamId =
   | "namNormalize"
   | "cabOn"
   | "cabLowCutHz"
-  | "cabHighCutHz";
+  | "cabHighCutHz"
+  | "screamerOn"
+  | "screamerDrive"
+  | "screamerTone"
+  | "screamerLevel"
+  | "echoesOn"
+  | "echoesTime"
+  | "echoesFeedback"
+  | "echoesMix"
+  | "chamberOn"
+  | "chamberDecay"
+  | "chamberTone"
+  | "chamberMix";
 /**
  * A parameter value normalized to the JUCE APVTS convention of 0..1, regardless of the parameter's real-world range/units (e.g. outputGain's underlying range is -60..+12 dB). The engine owns the mapping in both directions.
  */
 export type NormalizedParamValue = number;
+/**
+ * The floor pedals' left-to-right / signal order: a permutation of all three PedalIds, no duplicates, no omissions.
+ *
+ * @minItems 3
+ * @maxItems 3
+ */
+export type ChainOrder = [PedalId, PedalId, PedalId];
+/**
+ * Identifiers for the three floor pedals, used only for chain ordering (each pedal's own on/off + knob params are ParamIds above). Order matters: index 0 is first in the signal path (closest to the input trim/gate), index 2 feeds the NAM amp.
+ */
+export type PedalId = "screamer" | "echoes" | "chamber";
 /**
  * Union of every message the C++ engine may send to the React UI.
  */
@@ -46,7 +69,7 @@ export type DecibelValue = number;
 /**
  * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing.
  */
-export type SchemaVersion = 1;
+export type SchemaVersion = 2;
 /**
  * Which loader a loadResult reports on.
  */
@@ -81,6 +104,13 @@ export interface RequestRigState {
   type: "requestRigState";
 }
 /**
+ * UI -> engine. Commits a new floor pedal signal order, e.g. after a drag-reorder or keyboard swap gesture. order must be exactly a permutation of the three PedalIds; the engine rejects (ignores) anything else and does not echo a rigState back for a rejected message. On success the engine applies the new order glitch-free (no audio dropout) and the new order round-trips back on the next rigState (including on a later requestRigState, and after DAW state restore).
+ */
+export interface SetChainOrder {
+  type: "setChainOrder";
+  order: ChainOrder;
+}
+/**
  * Engine -> UI. A single coalesced metering sample, pushed on a 30-60Hz timer off the audio thread (never per-block). M0 carries just the passthrough in/out peaks; more taps (per-block, tuner, etc.) are added as new fields in later milestones, not new message types.
  */
 export interface MeterFrame {
@@ -103,7 +133,7 @@ export interface ParamValueMap {
   [k: string]: NormalizedParamValue;
 }
 /**
- * Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any) and the managed library contents. Sent on page load, after any loadNamModel/loadIr completes, and in reply to requestRigState.
+ * Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any), the floor pedal chain order, and the managed library contents. Sent on page load, after any loadNamModel/loadIr/setChainOrder completes, and in reply to requestRigState.
  */
 export interface RigState {
   type: "rigState";
@@ -111,6 +141,7 @@ export interface RigState {
   namModelName: string | null;
   namModelSampleRate: number;
   irName: string | null;
+  chainOrder: ChainOrder;
   library: RigLibrary;
 }
 /**

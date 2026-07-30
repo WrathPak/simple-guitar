@@ -1,7 +1,7 @@
 import type { CSSProperties, KeyboardEvent, MouseEvent } from "react";
+import type { ParamHandle } from "../bridge";
 import "./PedalDevice.css";
 import { Knob } from "./Knob";
-import { angleToValue } from "./knobMath";
 import type { PedalDef } from "./pedalDefs";
 
 export interface PedalDeviceProps {
@@ -14,10 +14,14 @@ export interface PedalDeviceProps {
   onJackRef?: (which: "in" | "out", el: HTMLElement | null) => void;
   /** Shift+ArrowLeft/Right: swap this pedal with its neighbor in `direction`. */
   onSwap?: (direction: -1 | 1) => void;
+  /** Live param handles for the 3 knobs, same order as pedal.knobs. Only
+      used when focused -- the wide shot's knobs stay purely decorative
+      (angle-only), same convention as AmpDevice/CabDevice. */
+  knobs?: [ParamHandle, ParamHandle, ParamHandle];
 }
 
 /** Family-colored stompbox: decorative knobs in the wide shot, interactive when focused. */
-export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass, onJackRef, onSwap }: PedalDeviceProps) {
+export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass, onJackRef, onSwap, knobs }: PedalDeviceProps) {
   const knobSize = focused ? 57 : 32;
 
   const handleFootswitchClick = (e: MouseEvent) => {
@@ -50,10 +54,17 @@ export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass,
           .join(" ")}
       >
         <div className="pedal-panel">
-          {pedal.knobs.map((k) =>
+          {pedal.knobs.map((k, i) =>
             focused ? (
               <div key={k.label} className="pedal-knob-well">
-                <Knob size={knobSize} label={k.label} defaultValue={angleToValue(k.angle)} />
+                <Knob
+                  size={knobSize}
+                  label={k.label}
+                  value={knobs?.[i].value}
+                  defaultValue={k.defaultValue}
+                  format={k.format}
+                  onChange={knobs?.[i].setValue}
+                />
               </div>
             ) : (
               <div key={k.label} className="pedal-knob-well">

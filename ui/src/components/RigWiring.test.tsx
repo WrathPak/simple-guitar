@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFakeJuceBackend } from "../test/fakeJuceBackend";
 import { Room } from "./Room";
@@ -87,12 +87,13 @@ describe("Model picker overlay", () => {
     const fake = renderWithFakeBackend();
     fake.trigger("rigState", {
       type: "rigState",
-      schemaVersion: 1,
+      schemaVersion: 2,
       namModelName: null,
       namModelSampleRate: 0,
       irName: null,
+      chainOrder: ["screamer", "echoes", "chamber"],
       library: {
-        models: [{ name: "Mark IIC+", path: "C:\\Users\\brett\\Documents\\Simple Guitar\\Models\\Mark IIC+.nam" }],
+        models: [{ name: "Mark IIC+", path: "C:\\test-home\\Documents\\Simple Guitar\\Models\\Mark IIC+.nam" }],
         irs: [],
       },
     });
@@ -105,7 +106,7 @@ describe("Model picker overlay", () => {
     expect(lastEmit?.id).toBe("loadNamModel");
     expect(lastEmit?.data).toMatchObject({
       type: "loadNamModel",
-      path: "C:\\Users\\brett\\Documents\\Simple Guitar\\Models\\Mark IIC+.nam",
+      path: "C:\\test-home\\Documents\\Simple Guitar\\Models\\Mark IIC+.nam",
     });
   });
 
@@ -113,10 +114,11 @@ describe("Model picker overlay", () => {
     const fake = renderWithFakeBackend();
     fake.trigger("rigState", {
       type: "rigState",
-      schemaVersion: 1,
+      schemaVersion: 2,
       namModelName: null,
       namModelSampleRate: 0,
       irName: null,
+      chainOrder: ["screamer", "echoes", "chamber"],
       library: { models: [], irs: [] },
     });
 
@@ -137,10 +139,11 @@ describe("Cab focus and wiring", () => {
     const fake = renderWithFakeBackend();
     fake.trigger("rigState", {
       type: "rigState",
-      schemaVersion: 1,
+      schemaVersion: 2,
       namModelName: null,
       namModelSampleRate: 0,
       irName: "4x12 V30",
+      chainOrder: ["screamer", "echoes", "chamber"],
       library: { models: [], irs: [] },
     });
 
@@ -169,10 +172,11 @@ describe("Cab focus and wiring", () => {
     const fake = renderWithFakeBackend();
     fake.trigger("rigState", {
       type: "rigState",
-      schemaVersion: 1,
+      schemaVersion: 2,
       namModelName: null,
       namModelSampleRate: 0,
       irName: null,
+      chainOrder: ["screamer", "echoes", "chamber"],
       library: { models: [], irs: [{ name: "2x12 Blue", path: "C:\\IRs\\2x12 Blue.wav" }] },
     });
 
@@ -219,5 +223,130 @@ describe("Gate overlay (⋯ menu)", () => {
     expect(screen.queryByRole("dialog", { name: "Gate" })).not.toBeInTheDocument();
     // Amp is still focused -- one Esc only closed the overlay.
     expect(screen.getByRole("slider", { name: "Output" })).toBeInTheDocument();
+  });
+});
+
+describe("Floor pedal knob <-> bridge round trip", () => {
+  afterEach(() => {
+    delete window.__JUCE__;
+  });
+
+  it("Screamer's Drive knob emits on the screamerDrive channel", () => {
+    const fake = renderWithFakeBackend();
+    fireEvent.click(screen.getByRole("button", { name: "Focus screamer" }));
+    const driveKnob = screen.getByRole("slider", { name: "Drive" });
+
+    fireEvent.pointerDown(driveKnob, { clientY: 200, pointerId: 10, button: 0 });
+    fireEvent.pointerMove(driveKnob, { clientY: 100, pointerId: 10 });
+
+    const lastEmit = fake.emitted.at(-1);
+    expect(lastEmit?.id).toBe("screamerDrive");
+    expect(lastEmit?.data).toMatchObject({ type: "valueChanged" });
+    expect((lastEmit!.data as { value: number }).value).toBeGreaterThan(0.5);
+  });
+
+  it("Echoes' Time knob emits on the echoesTime channel", () => {
+    const fake = renderWithFakeBackend();
+    fireEvent.click(screen.getByRole("button", { name: "Focus echoes" }));
+    const timeKnob = screen.getByRole("slider", { name: "Time" });
+
+    fireEvent.pointerDown(timeKnob, { clientY: 200, pointerId: 11, button: 0 });
+    fireEvent.pointerMove(timeKnob, { clientY: 100, pointerId: 11 });
+
+    expect(fake.emitted.at(-1)?.id).toBe("echoesTime");
+  });
+
+  it("Chamber's Decay knob emits on the chamberDecay channel", () => {
+    const fake = renderWithFakeBackend();
+    fireEvent.click(screen.getByRole("button", { name: "Focus chamber" }));
+    const decayKnob = screen.getByRole("slider", { name: "Decay" });
+
+    fireEvent.pointerDown(decayKnob, { clientY: 200, pointerId: 12, button: 0 });
+    fireEvent.pointerMove(decayKnob, { clientY: 100, pointerId: 12 });
+
+    expect(fake.emitted.at(-1)?.id).toBe("chamberDecay");
+  });
+});
+
+describe("Pedal footswitch <-> *On param round trip", () => {
+  afterEach(() => {
+    delete window.__JUCE__;
+  });
+
+  it("wide footswitch click emits the *On param, and the focused instance reflects the same shared state", () => {
+    const fake = renderWithFakeBackend();
+
+    // screamerOn defaults to false (bypassed) -- clicking the wide
+    // footswitch should turn it on.
+    const wideFootswitch = screen.getByRole("button", { name: "screamer bypass" });
+    expect(wideFootswitch).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(wideFootswitch);
+    expect(fake.emitted.at(-1)).toMatchObject({ id: "screamerOn", data: { type: "valueChanged", value: 1 } });
+    expect(wideFootswitch).toHaveAttribute("aria-pressed", "true");
+
+    // Focusing the pedal renders a second footswitch (wide row + focused
+    // card); both must read the same on state -- there's no separate
+    // UI-local bypass state left to fall out of sync (that's the whole
+    // point of binding the footswitch straight to the shared *On param).
+    fireEvent.click(screen.getByRole("button", { name: "Focus screamer" }));
+    const footswitches = screen.getAllByRole("button", { name: "screamer bypass" });
+    expect(footswitches.length).toBeGreaterThanOrEqual(2);
+    for (const footswitch of footswitches) expect(footswitch).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("backend-originated *On changes update the footswitch too (host automation / preset restore)", () => {
+    const fake = renderWithFakeBackend();
+    const footswitch = screen.getByRole("button", { name: "chamber bypass" });
+    expect(footswitch).toHaveAttribute("aria-pressed", "true"); // chamberOn defaults to true
+
+    act(() => {
+      fake.trigger("chamberOn", { type: "valueChanged", value: 0 });
+    });
+    expect(footswitch).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+describe("Chain order <-> bridge round trip", () => {
+  afterEach(() => {
+    delete window.__JUCE__;
+  });
+
+  it("committing a drag-reorder sends setChainOrder with a permutation of the three pedal ids", () => {
+    const fake = renderWithFakeBackend();
+
+    const screamerSlot = screen.getByRole("button", { name: "Focus screamer" }).closest(".pedal-slot");
+    expect(screamerSlot).not.toBeNull();
+
+    fireEvent.pointerDown(screamerSlot!, { clientX: 100, clientY: 0, pointerId: 20, button: 0 });
+    fireEvent.pointerMove(screamerSlot!, { clientX: 400, clientY: 0, pointerId: 20 });
+    fireEvent.pointerUp(screamerSlot!, { pointerId: 20 });
+
+    const lastEmit = fake.emitted.at(-1);
+    expect(lastEmit?.id).toBe("setChainOrder");
+    expect(lastEmit?.data).toMatchObject({ type: "setChainOrder" });
+
+    const order = (lastEmit!.data as { order: string[] }).order;
+    expect(order).toHaveLength(3);
+    expect(new Set(order)).toEqual(new Set(["screamer", "echoes", "chamber"]));
+  });
+
+  it("adopts chainOrder from rigState, rearranging the floor (e.g. after a DAW session restore)", () => {
+    const fake = renderWithFakeBackend();
+    act(() => {
+      fake.trigger("rigState", {
+        type: "rigState",
+        schemaVersion: 2,
+        namModelName: null,
+        namModelSampleRate: 0,
+        irName: null,
+        chainOrder: ["chamber", "screamer", "echoes"],
+        library: { models: [], irs: [] },
+      });
+    });
+
+    const focusButtons = screen.getAllByRole("button", { name: /^Focus (screamer|echoes|chamber)$/ });
+    const order = focusButtons.map((button) => button.getAttribute("aria-label")!.replace("Focus ", ""));
+    expect(order).toEqual(["chamber", "screamer", "echoes"]);
   });
 });

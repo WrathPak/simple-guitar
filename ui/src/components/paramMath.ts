@@ -91,3 +91,43 @@ export function isParamOn(value: number): boolean {
 export function boolParamValue(on: boolean): number {
   return on ? 1 : 0;
 }
+
+/**
+ * M2 floor pedal params (screamer/echoes/chamber): all nine continuous
+ * params are plain 0..1 normalized floats end to end -- the engine
+ * (sg::Screamer/StereoDelay/PlateReverb) owns the real-unit mapping
+ * internally and never reports it back over the bridge, so the UI only
+ * needs display-only math for a knob's drag/hover tooltip, same spirit as
+ * the M1 math above but without a real engine value to be exactly right
+ * about -- these are cosmetic approximations of the engine's own mapping,
+ * not the source of truth.
+ */
+export interface LogMsRange {
+  startMs: number;
+  endMs: number;
+}
+
+/** Mirrors sg::StereoDelay's setTime() mapping (engine/include/sg/StereoDelay.h: 60ms..1200ms, log-mapped). */
+export const ECHOES_TIME_RANGE: LogMsRange = { startMs: 60, endMs: 1200 };
+
+/** normalized value (0..1) -> ms, log-mapped: start * (end/start)^t. */
+export function normalizedToLogMs(value: number, range: LogMsRange): number {
+  const t = clampNormalized(value);
+  return range.startMs * Math.pow(range.endMs / range.startMs, t);
+}
+
+/** e.g. "620 ms" below 1s, "1.20 s" at/above it -- sensible, no false precision. */
+export function formatMs(ms: number): string {
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
+  return `${Math.round(ms)} ms`;
+}
+
+/** Formats a knob's normalized value straight to ms/s for a log-mapped time range. */
+export function formatLogMs(value: number, range: LogMsRange): string {
+  return formatMs(normalizedToLogMs(value, range));
+}
+
+/** Plain "0-10" pedal-knob dial reading for the other floor-pedal knobs (drive/tone/level/feedback/mix/decay) -- no real-world unit to report, just the familiar stompbox convention. */
+export function format01AsTen(value: number): string {
+  return (clampNormalized(value) * 10).toFixed(1);
+}
