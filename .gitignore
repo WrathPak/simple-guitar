@@ -1,0 +1,24 @@
+# Build output
+build/
+out/
+cmake-build-*/
+*.obj
+*.pdb
+
+# IDE
+.vs/
+.vscode/
+*.user
+CMakeSettings.json
+
+# Node
+node_modules/
+ui/dist/
+*.tsbuildinfo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local scratch
+*.log
