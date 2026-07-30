@@ -1,11 +1,61 @@
-# SimpleGuitar — JUCE shell: processor, placeholder editor, standalone + plugin targets.
-# The webview-hosted editor is a separate workstream; NEEDS_WEBVIEW2 / JUCE_WEB_BROWSER
-# are enabled now so that later wave doesn't force a build-system churn.
+# SimpleGuitar — JUCE shell: processor, webview-hosted editor, standalone + plugin targets.
+# NEEDS_WEBVIEW2 / JUCE_WEB_BROWSER enable the WebBrowserComponent editor that serves
+# the built React UI (ui/dist), zipped and embedded as BinaryData at build time.
 
 set(SG_PLUGIN_FORMATS Standalone VST3)
 if(APPLE)
     list(APPEND SG_PLUGIN_FORMATS AU)
 endif()
+
+# ---------------------------------------------------------------------------
+# UI embedding: build ui/ (npm run build -> ui/dist), zip the dist folder, and
+# embed the zip as BinaryData. The editor (PluginEditor.cpp) serves it back
+# out through a WebBrowserComponent resource provider + juce::ZipFile, mirroring
+# JUCE's own examples/Plugins/WebViewPluginDemo.h reference pattern.
+set(SG_UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ui")
+set(SG_UI_DIST_DIR "${SG_UI_DIR}/dist")
+set(SG_UI_DIST_STAMP "${SG_UI_DIST_DIR}/index.html")
+set(SG_UI_ZIP "${CMAKE_CURRENT_BINARY_DIR}/webview/uidist.zip")
+
+find_program(SG_NPM_EXECUTABLE NAMES npm npm.cmd)
+if(NOT SG_NPM_EXECUTABLE)
+    message(FATAL_ERROR "npm not found on PATH -- required to build ui/ (see app/CMakeLists.txt)")
+endif()
+
+# Re-run `npm run build` whenever any UI source file is newer than the last
+# build output. CONFIGURE_DEPENDS re-globs on each build-system regeneration
+# so newly added files are picked up on the next `cmake --build`/reconfigure.
+file(GLOB_RECURSE SG_UI_SOURCE_FILES CONFIGURE_DEPENDS
+    "${SG_UI_DIR}/src/*"
+    "${SG_UI_DIR}/public/*"
+)
+list(APPEND SG_UI_SOURCE_FILES
+    "${SG_UI_DIR}/index.html"
+    "${SG_UI_DIR}/package.json"
+    "${SG_UI_DIR}/vite.config.ts"
+    "${SG_UI_DIR}/tsconfig.json"
+)
+
+add_custom_command(
+    OUTPUT "${SG_UI_DIST_STAMP}"
+    COMMAND "${SG_NPM_EXECUTABLE}" run build
+    WORKING_DIRECTORY "${SG_UI_DIR}"
+    DEPENDS ${SG_UI_SOURCE_FILES}
+    COMMENT "ui: npm run build (React app -> ui/dist)"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${SG_UI_ZIP}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/webview"
+    COMMAND "${CMAKE_COMMAND}" -E tar "cf" "${SG_UI_ZIP}" --format=zip .
+    WORKING_DIRECTORY "${SG_UI_DIST_DIR}"
+    DEPENDS "${SG_UI_DIST_STAMP}"
+    COMMENT "ui: zipping ui/dist -> ${SG_UI_ZIP}"
+    VERBATIM
+)
+
+juce_add_binary_data(SimpleGuitarUiData SOURCES "${SG_UI_ZIP}")
 
 juce_add_plugin(SimpleGuitar
     COMPANY_NAME                "Simple Guitar"
@@ -29,6 +79,7 @@ target_sources(SimpleGuitar
     PRIVATE
         source/PluginProcessor.cpp
         source/PluginEditor.cpp
+        source/WebviewBridge.cpp
 )
 
 target_compile_definitions(SimpleGuitar
@@ -39,9 +90,23 @@ target_compile_definitions(SimpleGuitar
         JUCE_ALSA=0
 )
 
+if(WIN32)
+    # Required for WebBrowserComponent::Options::Backend::webview2, the
+    # resource provider (withResourceProvider), and the statically-linked
+    # WebView2LoaderStatic.lib pulled in by NEEDS_WEBVIEW2 above -- mirrors
+    # JUCE's own WebViewPluginDemo PIP moduleFlags
+    # (JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1), which the Projucer/PIP
+    # exporters set automatically but plain CMake does not.
+    target_compile_definitions(SimpleGuitar
+        PUBLIC
+            JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1
+    )
+endif()
+
 target_link_libraries(SimpleGuitar
     PRIVATE
         sg_engine
+        SimpleGuitarUiData
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_dsp
