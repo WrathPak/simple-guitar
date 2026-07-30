@@ -3,7 +3,15 @@
   z-index: 2;
   transform: scale(0.72);
   transform-origin: bottom center;
-  margin-bottom: 118px;
+  /*
+   * Leaves a clear floor gap between the cab's bottom edge and the pedal
+   * row's top-jack line (target ~50-70px at the default 1180x760 window) so
+   * the amp cable's horizontal rail has room to read as a deliberate run,
+   * not get crowded against the pedals. Both this and the pedal row are
+   * anchored to the room's bottom edge with fixed offsets, so the gap
+   * between them holds steady across window sizes rather than collapsing.
+   */
+  margin-bottom: 160px;
 }
 
 .backline-stack {
@@ -23,12 +31,15 @@
   box-shadow: 0 24px 44px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-/* Geometry-only: where the last pedal's cable ends, up under the amp head's
-   lower edge (the amp sits directly above with a 10px gap; -16px pulls the
-   point up into the amp head's own painted box so the cable tucks behind it). */
+/* Geometry-only: where the last pedal's cable ends. Sits just inside the
+   cab's own bottom edge (not up near the amp head) so the route's horizontal
+   rail — the midpoint between this anchor and the pedal's OUT jack — falls
+   inside the visible floor gap instead of being buried behind the whole
+   backline height. Still solidly within the cab's painted box, so the final
+   run up into it tucks behind the cab as intended. */
 .backline-cable-anchor {
   position: absolute;
-  top: -16px;
+  bottom: 10px;
   left: 55%;
   width: 1px;
   height: 1px;

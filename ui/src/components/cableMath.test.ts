@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { ampRoutePath, DEFAULT_CORNER_RADIUS, MAX_ARCH_HEIGHT, MIN_ARCH_HEIGHT, pedalArchPath } from "./cableMath";
+import { ampRoutePath, DEFAULT_CORNER_RADIUS, MAX_ARCH_HEIGHT, MIN_ARCH_HEIGHT, pedalArchPath, portTopCenter } from "./cableMath";
+
+describe("portTopCenter", () => {
+  it("is horizontally centered on the port", () => {
+    const port = { left: 100, top: 50, width: 20, height: 10 };
+    const container = { left: 0, top: 0, width: 1000, height: 1000 };
+    expect(portTopCenter(port, container)).toEqual({ x: 110, y: 50 });
+  });
+
+  it("uses the port's top edge, not its vertical center", () => {
+    const port = { left: 0, top: 200, width: 10, height: 30 };
+    const container = { left: 0, top: 0, width: 1000, height: 1000 };
+    const p = portTopCenter(port, container);
+    expect(p.y).toBe(200); // not 215 (the port's own vertical center)
+  });
+
+  it("is relative to the container's origin, not the viewport", () => {
+    const port = { left: 340, top: 260, width: 10, height: 10 };
+    const container = { left: 300, top: 200, width: 800, height: 600 };
+    expect(portTopCenter(port, container)).toEqual({ x: 45, y: 60 });
+  });
+});
 
 describe("pedalArchPath", () => {
   it("starts and ends exactly at the given jack points", () => {

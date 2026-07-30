@@ -23,6 +23,11 @@ body {
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* This is a scene, not a document — nothing in it (pedal names, chrome
+     labels, gear text) is ever meant to be selected. A drag on a pedal
+     should reorder it, not highlight text underneath it. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 button {

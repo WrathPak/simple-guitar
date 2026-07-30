@@ -25,46 +25,57 @@ export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass,
     onToggleBypass();
   };
 
+  // Jacks live OUTSIDE `.pedal` (as siblings in `.pedal-shell`, painted AFTER
+  // it so they sit on top) so they can protrude above the shell's top edge
+  // without being clipped by `.pedal`'s own `overflow: hidden` (needed on
+  // the shell to keep its rounded-corner shadow from rasterizing a seam —
+  // see PedalDevice.css).
+  const jacks = (
+    <div className="pedal-jacks" aria-hidden="true">
+      <span className="pedal-jack pedal-jack--in" ref={(el) => onJackRef?.("in", el)} />
+      <span className="pedal-jack pedal-jack--out" ref={(el) => onJackRef?.("out", el)} />
+    </div>
+  );
+
   const body = (
-    <div
-      className={[
-        "pedal",
-        `pedal--${pedal.family}`,
-        focused ? "pedal--focused" : "pedal--wide",
-        bypassed ? "pedal--bypassed" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
-      <div className="pedal-jacks" aria-hidden="true">
-        <span className="pedal-jack pedal-jack--in" ref={(el) => onJackRef?.("in", el)} />
-        <span className="pedal-jack pedal-jack--out" ref={(el) => onJackRef?.("out", el)} />
+    <div className="pedal-shell">
+      <div
+        className={[
+          "pedal",
+          `pedal--${pedal.family}`,
+          focused ? "pedal--focused" : "pedal--wide",
+          bypassed ? "pedal--bypassed" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        <div className="pedal-panel">
+          {pedal.knobs.map((k) =>
+            focused ? (
+              <div key={k.label} className="pedal-knob-well">
+                <Knob size={knobSize} label={k.label} defaultValue={angleToValue(k.angle)} />
+              </div>
+            ) : (
+              <div key={k.label} className="pedal-knob-well">
+                <div className="pedal-deco-knob" style={{ "--r": `${k.angle}deg` } as CSSProperties} />
+                <div className="pedal-deco-label">{k.label}</div>
+              </div>
+            ),
+          )}
+        </div>
+        <div className="pedal-name">{pedal.name}</div>
+        <div className="pedal-foot">
+          <div className="pedal-led" aria-hidden="true" />
+          <button
+            type="button"
+            className="pedal-footswitch"
+            aria-label={`${pedal.name} bypass`}
+            aria-pressed={!bypassed}
+            onClick={handleFootswitchClick}
+          />
+        </div>
       </div>
-      <div className="pedal-panel">
-        {pedal.knobs.map((k) =>
-          focused ? (
-            <div key={k.label} className="pedal-knob-well">
-              <Knob size={knobSize} label={k.label} defaultValue={angleToValue(k.angle)} />
-            </div>
-          ) : (
-            <div key={k.label} className="pedal-knob-well">
-              <div className="pedal-deco-knob" style={{ "--r": `${k.angle}deg` } as CSSProperties} />
-              <div className="pedal-deco-label">{k.label}</div>
-            </div>
-          ),
-        )}
-      </div>
-      <div className="pedal-name">{pedal.name}</div>
-      <div className="pedal-foot">
-        <div className="pedal-led" aria-hidden="true" />
-        <button
-          type="button"
-          className="pedal-footswitch"
-          aria-label={`${pedal.name} bypass`}
-          aria-pressed={!bypassed}
-          onClick={handleFootswitchClick}
-        />
-      </div>
+      {jacks}
     </div>
   );
 

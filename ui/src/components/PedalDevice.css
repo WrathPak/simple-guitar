@@ -1,12 +1,26 @@
 .pedal-trigger {
   display: block;
   cursor: pointer;
+  /*
+   * The wide-shot scale lives here (rather than on `.pedal` itself) so that
+   * `.pedal-jacks` — a sibling of `.pedal` inside `.pedal-shell`, painted on
+   * top of it so the ports read as protruding hardware — scales down in
+   * lockstep with the shell without being subject to `.pedal`'s own
+   * `overflow: hidden` (see below).
+   */
+  transform: scale(0.82);
+  transform-origin: bottom center;
 }
 
 .pedal-trigger:focus-visible .pedal,
 .pedal:focus-visible {
   outline: 2px solid var(--text-mid);
   outline-offset: 3px;
+}
+
+.pedal-shell {
+  position: relative;
+  display: inline-block;
 }
 
 .pedal {
@@ -20,14 +34,12 @@
 }
 
 .pedal--wide {
-  transform: scale(0.82);
-  transform-origin: bottom center;
   /*
    * Fixes a faint light hairline that used to trace the rounded bottom
    * edge of every pedal in the wide shot. Cause: the bottom inset shadow
-   * (below) darkens the shell near its rounded corners, but at this
-   * fractional scale (170px * 0.82 = a non-integer device-pixel box) the
-   * browser can rasterize that inset shadow's rounded clip a hair off
+   * (below) darkens the shell near its rounded corners, but at the wide
+   * shot's fractional scale (170px * 0.82 = a non-integer device-pixel box)
+   * the browser can rasterize that inset shadow's rounded clip a hair off
    * from the shell's own border-radius clip, leaving a sliver of
    * un-darkened (hence lighter) shell showing right at the seam. Forcing
    * one consistent clip for everything painted inside the rounded box
@@ -43,25 +55,37 @@
   padding: 18px 18px 20px;
 }
 
+/* Positioning reference only (zero-height, spans the shell's full width so
+   the 20%-from-each-corner insets below resolve against the pedal's own
+   width). The visible hardware is entirely on `.pedal-jack` itself. */
 .pedal-jacks {
   position: absolute;
-  top: 2px;
+  top: 0;
   left: 0;
   right: 0;
-  display: flex;
-  justify-content: space-between;
-  padding: 0 16px;
   pointer-events: none;
 }
 
 .pedal-jack {
-  width: calc(var(--pw) * 0.075);
-  height: calc(var(--pw) * 0.075);
-  min-width: 9px;
-  min-height: 9px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #57575f, #17171a 70%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 2px rgba(0, 0, 0, 0.6), 0 1px 2px rgba(0, 0, 0, 0.55), 0 0 0 1.5px rgba(0, 0, 0, 0.4);
+  position: absolute;
+  top: -4px;
+  width: calc(var(--pw) * 0.08);
+  height: calc(var(--pw) * 0.115);
+  min-width: 10px;
+  min-height: 14px;
+  border-radius: 45% 45% 30% 30% / 35% 35% 25% 25%;
+  background: radial-gradient(circle at 32% 22%, #5c5c64 0%, #232327 55%, #141417 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 -1px 2px rgba(0, 0, 0, 0.65), 0 2px 3px rgba(0, 0, 0, 0.55), 0 0 0 1.5px rgba(0, 0, 0, 0.45);
+}
+
+.pedal-jack--in {
+  left: 20%;
+  transform: translateX(-50%);
+}
+
+.pedal-jack--out {
+  left: 80%;
+  transform: translateX(-50%);
 }
 
 .pedal-panel {

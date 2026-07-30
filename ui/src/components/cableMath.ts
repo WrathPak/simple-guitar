@@ -15,6 +15,27 @@ export interface Point {
   y: number;
 }
 
+/** A subset of DOMRect — plain-object friendly, so this stays unit-testable without a real DOM. */
+export interface RectLike {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Where a cable should visibly enter a port: its top-center, so the cable
+ * runs straight down (or up) into the socket rather than off to one side of
+ * it. `portRect` and `containerRect` are both viewport-relative; the result
+ * is relative to `containerRect`.
+ */
+export function portTopCenter(portRect: RectLike, containerRect: RectLike): Point {
+  return {
+    x: portRect.left + portRect.width / 2 - containerRect.left,
+    y: portRect.top - containerRect.top,
+  };
+}
+
 function round(n: number): number {
   return Math.round(n * 100) / 100;
 }

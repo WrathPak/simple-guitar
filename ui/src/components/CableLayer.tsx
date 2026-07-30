@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./CableLayer.css";
-import { ampRoutePath, pedalArchPath, type Point } from "./cableMath";
+import { ampRoutePath, pedalArchPath, portTopCenter } from "./cableMath";
 
 export interface JackPair {
   inEl: HTMLElement | null;
@@ -25,18 +25,13 @@ interface Viewport {
   height: number;
 }
 
-function centerOf(container: DOMRect, el: HTMLElement, edge: "top" | "topRight" | "topLeft"): Point {
-  const r = el.getBoundingClientRect();
-  const x = edge === "topLeft" ? r.left : edge === "topRight" ? r.right : r.left + r.width / 2;
-  return { x: x - container.left, y: r.top + r.height / 2 - container.top };
-}
-
 /**
  * SVG overlay: an arched patch cable from each pedal's OUT jack up and over
  * into the next pedal's IN jack, and a final orthogonal run from the last
- * pedal's OUT jack up to the anchor behind the amp. Pure geometry read live
- * from the DOM every time something could have moved — no hardcoded
- * coordinates.
+ * pedal's OUT jack up to the anchor behind the amp. Endpoints are each
+ * port's top-center, so the cable visibly enters the socket rather than
+ * floating beside it. Pure geometry read live from the DOM every time
+ * something could have moved — no hardcoded coordinates.
  */
 export function CableLayer({ containerRef, order, jacksRef, ampAnchorRef, active }: CableLayerProps) {
   const [paths, setPaths] = useState<string[]>([]);
@@ -56,8 +51,8 @@ export function CableLayer({ containerRef, order, jacksRef, ampAnchorRef, active
       const from = jacks?.get(order[i]);
       const to = jacks?.get(order[i + 1]);
       if (!from?.outEl || !to?.inEl) continue;
-      const a = centerOf(containerRect, from.outEl, "topRight");
-      const b = centerOf(containerRect, to.inEl, "topLeft");
+      const a = portTopCenter(from.outEl.getBoundingClientRect(), containerRect);
+      const b = portTopCenter(to.inEl.getBoundingClientRect(), containerRect);
       next.push(pedalArchPath(a, b));
     }
 
@@ -65,8 +60,8 @@ export function CableLayer({ containerRef, order, jacksRef, ampAnchorRef, active
     const last = lastId ? jacks?.get(lastId) : undefined;
     const anchor = ampAnchorRef.current;
     if (last?.outEl && anchor) {
-      const a = centerOf(containerRect, last.outEl, "topRight");
-      const b = centerOf(containerRect, anchor, "top");
+      const a = portTopCenter(last.outEl.getBoundingClientRect(), containerRect);
+      const b = portTopCenter(anchor.getBoundingClientRect(), containerRect);
       next.push(ampRoutePath(a, b));
     }
 
