@@ -59,21 +59,63 @@
          harmless no-op that still echoes "rigState". Success (including
          the no-op case) echoes a fresh "rigState".
 
+    Hosted third-party plugins (M3, see PluginProcessor.h's class-level
+    comment and PluginHosting.h):
+
+    JS -> native, channel "requestPluginScan": { type: "requestPluginScan" }
+      -- starts an out-of-process, incremental scan of the standard VST3
+         locations (+ user-added folders from the persisted cache). Replies
+         with "pluginScanProgress" events while scanning and a single
+         "pluginScanDone" + fresh "rigState" when finished. Ignored while a
+         scan is already running; if scanning is unavailable (hosted/
+         non-standalone build), replies immediately with a
+         pluginScanDone over the existing cache.
+
+    JS -> native, channel "setSlotPlugin": { type: "setSlotPlugin", slot: 0..5, pluginId: string }
+      -- puts the scanned plugin (a rigState.plugins[].id) into the slot:
+         type -> 7, on/P1-4 reset to flat defaults (P1 is the engine-side
+         wet/dry mix), async instance build starts. Echoes a fresh
+         "rigState" immediately; a "loadResult" kind:"plugin" + another
+         "rigState" follow when the build resolves. slot/pluginId invalid
+         -> silently rejected.
+
+    JS -> native, channel "openPluginEditor": { type: "openPluginEditor", slot: 0..5 }
+      -- opens/refocuses the hosted plugin's own editor in a floating
+         native window (the sanctioned native-window exception). Silently
+         ignored unless the slot has a live hosted instance.
+
+    native -> JS, channel "pluginScanProgress":
+      { type: "pluginScanProgress", done, total, currentName }
+    native -> JS, channel "pluginScanDone":
+      { type: "pluginScanDone", found, failed: [names] }
+      -- failed lists candidates that crashed/failed this run (they're
+         blacklisted and skipped on future scans). Always followed by a
+         fresh "rigState".
+
     native -> JS, channel "loadResult":
-      { type: "loadResult", kind: "nam" | "ir", ok: boolean, message: string }
+      { type: "loadResult", kind: "nam" | "ir" | "plugin", ok: boolean, message: string }
       -- sent once a loadNamModel/loadIr request (valid or rejected) has been
-         resolved; always followed by a fresh "rigState".
+         resolved, or when a hosted-plugin instance build resolves (kind
+         "plugin" -- e.g. rejecting a plugin that can't do stereo in/out);
+         always followed by a fresh "rigState".
 
     native -> JS, channel "rigState":
       { type: "rigState", schemaVersion, namModelName: string|null,
         namModelSampleRate: number, irName: string|null,
-        slots: [{type: 0..6, on: boolean}, ...6 entries],
-        library: { models: [{name,path}], irs: [{name,path}] } }
-      -- sent on page load, after any load request, setSlotType, or
-         movePedal resolves, and in reply to "requestRigState". slots[i] is
-         slot i's current pedal type + on/off -- slot index IS signal
-         order, there is no separate chain-order concept. Rescans the
-         library folders each time.
+        slots: [{type: 0..7, on: boolean, pluginName?: string|null,
+                 pluginMissing?: boolean}, ...6 entries],
+        library: { models: [{name,path}], irs: [{name,path}] },
+        plugins: [{id,name,vendor}] }
+      -- sent on page load, after any load request, setSlotType, movePedal,
+         or setSlotPlugin resolves, after pluginScanDone, and in reply to
+         "requestRigState". slots[i] is slot i's current pedal type + on/off
+         -- slot index IS signal order, there is no separate chain-order
+         concept; type-7 entries additionally carry pluginName (null until
+         a plugin is picked) and pluginMissing (persisted plugin not
+         installed -- slot processes as bypass, revives on rescan).
+         plugins is the scanned list, sorted by name. Rescans the library
+         folders each time (the plugins list comes from the in-memory
+         cache -- only requestPluginScan rescans plugins).
 
     Presets (see app/source/PresetStore.h for the on-disk format and
     PluginProcessor.h for the manager itself):
@@ -114,6 +156,11 @@ public:
     static constexpr const char* requestRigStateChannelId = "requestRigState";
     static constexpr const char* setSlotTypeChannelId = "setSlotType";
     static constexpr const char* movePedalChannelId = "movePedal";
+    static constexpr const char* requestPluginScanChannelId = "requestPluginScan";
+    static constexpr const char* setSlotPluginChannelId = "setSlotPlugin";
+    static constexpr const char* openPluginEditorChannelId = "openPluginEditor";
+    static constexpr const char* pluginScanProgressChannelId = "pluginScanProgress";
+    static constexpr const char* pluginScanDoneChannelId = "pluginScanDone";
     static constexpr const char* rigStateChannelId = "rigState";
     static constexpr const char* loadResultChannelId = "loadResult";
     static constexpr const char* loadPresetChannelId = "loadPreset";
@@ -126,10 +173,11 @@ public:
     static constexpr const char* presetResultChannelId = "presetResult";
 
     /** Bridge protocol version, carried on every rigState/presetsState
-        message (see schema/bridge.schema.json SchemaVersion). v4 replaces
-        the fixed 3-pedal chainOrder with 6 generic slots (slots[] on
-        rigState, setSlotType/movePedal messages). */
-    static constexpr int schemaVersion = 4;
+        message (see schema/bridge.schema.json SchemaVersion). v5 adds
+        hosted third-party plugins (pedal type 7, requestPluginScan/
+        setSlotPlugin/openPluginEditor, pluginScanProgress/pluginScanDone,
+        rigState.plugins + per-slot pluginName/pluginMissing). */
+    static constexpr int schemaVersion = 5;
 
     /** Registers the valueChanged/gestureStart/gestureEnd listener for every
         param channel plus the loadNamModel/loadIr/requestRigState command
@@ -150,6 +198,9 @@ private:
     void handleRequestRigState (const juce::var& event);
     void handleSetSlotType (const juce::var& event);
     void handleMovePedal (const juce::var& event);
+    void handleRequestPluginScan (const juce::var& event);
+    void handleSetSlotPlugin (const juce::var& event);
+    void handleOpenPluginEditor (const juce::var& event);
     void handleLoadPreset (const juce::var& event);
     void handleSavePresetAs (const juce::var& event);
     void handleSaveCurrentPreset (const juce::var& event);
@@ -160,6 +211,8 @@ private:
     void pushParamValueToUi (int paramIndex);
     void sendRigState();
     void sendLoadResult (const char* kind, bool ok, const juce::String& message);
+    void sendPluginScanProgress (int done, int total, const juce::String& currentName);
+    void sendPluginScanDone (int found, const juce::StringArray& failedNames);
     void sendPresetsState();
     void sendPresetResult (bool ok, const juce::String& message);
 

@@ -38,11 +38,26 @@ WebviewBridge::WebviewBridge (SimpleGuitarAudioProcessor& processorToUse)
         params[i] = processor.apvts.getParameter (SimpleGuitarAudioProcessor::allParamIds[i]);
         lastKnownUiValue[i].store (-1.0f, std::memory_order_relaxed);
     }
+
+    // Hosted-plugin instance builds resolve asynchronously on the message
+    // thread; surface them as loadResult kind:"plugin" + a fresh rigState
+    // (same pairing as the nam/ir loaders). Weak-guarded: builds can
+    // outlive this bridge (editor closed mid-build).
+    juce::WeakReference<WebviewBridge> safeThis (this);
+    processor.setOnPluginLoadResult ([safeThis] (bool ok, juce::String message)
+    {
+        if (auto* self = safeThis.get())
+        {
+            self->sendLoadResult ("plugin", ok, message);
+            self->sendRigState();
+        }
+    });
 }
 
 WebviewBridge::~WebviewBridge()
 {
     stopTimer();
+    processor.setOnPluginLoadResult (nullptr);
 }
 
 juce::WebBrowserComponent::Options WebviewBridge::attachListenersTo (juce::WebBrowserComponent::Options opts)
@@ -58,6 +73,9 @@ juce::WebBrowserComponent::Options WebviewBridge::attachListenersTo (juce::WebBr
     opts = opts.withEventListener (requestRigStateChannelId, [this] (const juce::var& event) { handleRequestRigState (event); });
     opts = opts.withEventListener (setSlotTypeChannelId, [this] (const juce::var& event) { handleSetSlotType (event); });
     opts = opts.withEventListener (movePedalChannelId, [this] (const juce::var& event) { handleMovePedal (event); });
+    opts = opts.withEventListener (requestPluginScanChannelId, [this] (const juce::var& event) { handleRequestPluginScan (event); });
+    opts = opts.withEventListener (setSlotPluginChannelId, [this] (const juce::var& event) { handleSetSlotPlugin (event); });
+    opts = opts.withEventListener (openPluginEditorChannelId, [this] (const juce::var& event) { handleOpenPluginEditor (event); });
     opts = opts.withEventListener (loadPresetChannelId, [this] (const juce::var& event) { handleLoadPreset (event); });
     opts = opts.withEventListener (savePresetAsChannelId, [this] (const juce::var& event) { handleSavePresetAs (event); });
     opts = opts.withEventListener (saveCurrentPresetChannelId, [this] (const juce::var& event) { handleSaveCurrentPreset (event); });
@@ -214,6 +232,69 @@ void WebviewBridge::handleMovePedal (const juce::var& event)
     sendRigState();
 }
 
+void WebviewBridge::handleRequestPluginScan (const juce::var&)
+{
+    juce::WeakReference<WebviewBridge> safeThis (this);
+
+    const bool started = processor.startPluginScan (
+        [safeThis] (int done, int total, juce::String currentName)
+        {
+            if (auto* self = safeThis.get())
+                self->sendPluginScanProgress (done, total, currentName);
+        },
+        [safeThis] (int totalKnown, juce::StringArray failedNames)
+        {
+            if (auto* self = safeThis.get())
+            {
+                self->sendPluginScanDone (totalKnown, failedNames);
+                self->sendRigState();
+            }
+        });
+
+    if (! started && ! processor.isPluginScanning())
+    {
+        // Scanning unavailable (hosted/non-standalone build): report done
+        // over the existing cache so the UI isn't left waiting. An
+        // already-running scan, by contrast, keeps its own events coming --
+        // this request is simply ignored per the wire contract.
+        sendPluginScanDone (processor.getScannedPluginsSortedByName().size(), {});
+        sendRigState();
+    }
+}
+
+void WebviewBridge::handleSetSlotPlugin (const juce::var& event)
+{
+    auto* obj = event.getDynamicObject();
+    if (obj == nullptr)
+        return;
+
+    const auto slotVar = obj->getProperty ("slot");
+    const auto pluginIdVar = obj->getProperty ("pluginId");
+
+    if (! (slotVar.isInt() || slotVar.isInt64() || slotVar.isDouble()))
+        return;
+    if (! pluginIdVar.isString())
+        return;
+
+    if (! processor.setSlotPlugin ((int) slotVar, pluginIdVar.toString()))
+        return; // out of range / unknown id -- silently rejected, per the wire contract.
+
+    sendRigState();
+}
+
+void WebviewBridge::handleOpenPluginEditor (const juce::var& event)
+{
+    auto* obj = event.getDynamicObject();
+    if (obj == nullptr)
+        return;
+
+    const auto slotVar = obj->getProperty ("slot");
+    if (! (slotVar.isInt() || slotVar.isInt64() || slotVar.isDouble()))
+        return;
+
+    processor.openPluginEditor ((int) slotVar); // no live hosted instance -- silently ignored, per the wire contract.
+}
+
 void WebviewBridge::handleLoadPreset (const juce::var& event)
 {
     auto* obj = event.getDynamicObject();
@@ -321,10 +402,30 @@ void WebviewBridge::sendRigState()
     juce::Array<juce::var> slotsArray;
     for (int slot = 0; slot < sg::numSlots; ++slot)
     {
+        const int slotType = processor.getSlotType (slot);
+
         juce::DynamicObject::Ptr slotObj (new juce::DynamicObject());
-        slotObj->setProperty ("type", processor.getSlotType (slot));
+        slotObj->setProperty ("type", slotType);
         slotObj->setProperty ("on", processor.getSlotOn (slot));
+
+        if (slotType == (int) sg::PedalType::plugin)
+        {
+            const auto info = processor.getSlotPluginInfo (slot);
+            slotObj->setProperty ("pluginName", info.name.isNotEmpty() ? juce::var (info.name) : juce::var());
+            slotObj->setProperty ("pluginMissing", info.missing);
+        }
+
         slotsArray.add (juce::var (slotObj.get()));
+    }
+
+    juce::Array<juce::var> pluginsArray;
+    for (const auto& description : processor.getScannedPluginsSortedByName())
+    {
+        juce::DynamicObject::Ptr pluginObj (new juce::DynamicObject());
+        pluginObj->setProperty ("id", description.createIdentifierString());
+        pluginObj->setProperty ("name", description.name);
+        pluginObj->setProperty ("vendor", description.manufacturerName);
+        pluginsArray.add (juce::var (pluginObj.get()));
     }
 
     juce::DynamicObject::Ptr obj (new juce::DynamicObject());
@@ -335,8 +436,40 @@ void WebviewBridge::sendRigState()
     obj->setProperty ("irName", cab.isLoaded() ? juce::var (cab.getIrName()) : juce::var());
     obj->setProperty ("slots", juce::var (slotsArray));
     obj->setProperty ("library", juce::var (libraryObj.get()));
+    obj->setProperty ("plugins", juce::var (pluginsArray));
 
     browser->emitEventIfBrowserIsVisible (rigStateChannelId, obj.get());
+}
+
+void WebviewBridge::sendPluginScanProgress (int done, int total, const juce::String& currentName)
+{
+    if (browser == nullptr)
+        return;
+
+    juce::DynamicObject::Ptr obj (new juce::DynamicObject());
+    obj->setProperty (typeKey, "pluginScanProgress");
+    obj->setProperty ("done", done);
+    obj->setProperty ("total", total);
+    obj->setProperty ("currentName", currentName);
+
+    browser->emitEventIfBrowserIsVisible (pluginScanProgressChannelId, obj.get());
+}
+
+void WebviewBridge::sendPluginScanDone (int found, const juce::StringArray& failedNames)
+{
+    if (browser == nullptr)
+        return;
+
+    juce::Array<juce::var> failedArray;
+    for (const auto& name : failedNames)
+        failedArray.add (name);
+
+    juce::DynamicObject::Ptr obj (new juce::DynamicObject());
+    obj->setProperty (typeKey, "pluginScanDone");
+    obj->setProperty ("found", found);
+    obj->setProperty ("failed", juce::var (failedArray));
+
+    browser->emitEventIfBrowserIsVisible (pluginScanDoneChannelId, obj.get());
 }
 
 void WebviewBridge::sendLoadResult (const char* kind, bool ok, const juce::String& message)

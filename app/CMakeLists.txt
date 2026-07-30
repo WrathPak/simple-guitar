@@ -144,14 +144,34 @@ target_sources(SimpleGuitar
         source/ContentInstallerCore.cpp
         source/PedalSlots.cpp
         source/StateMigration.cpp
+        source/PluginScanCore.cpp
+        source/PluginSlotCore.cpp
+        source/PluginHosting.cpp
 )
 
+# JUCE_PLUGINHOST_VST3: M3 hosts third-party VST3 plugins inside the pedal
+# chain (see source/PluginHosting.h).
 target_compile_definitions(SimpleGuitar
     PUBLIC
         JUCE_WEB_BROWSER=1
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_ALSA=0
+        JUCE_PLUGINHOST_VST3=1
+)
+
+# The Standalone target swaps JUCE's stock StandaloneFilterApp for our own
+# (source/StandaloneApp.cpp): identical normal behavior plus the hidden
+# --scan-plugin child-process mode the out-of-process plugin scanner
+# launches per candidate (see source/PluginHosting.h). Standalone-only: the
+# other formats never scan out-of-process themselves.
+target_compile_definitions(SimpleGuitar_Standalone
+    PRIVATE
+        JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
+)
+target_sources(SimpleGuitar_Standalone
+    PRIVATE
+        source/StandaloneApp.cpp
 )
 
 if(WIN32)

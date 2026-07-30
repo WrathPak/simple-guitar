@@ -5,7 +5,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -92,13 +94,13 @@ TEST_CASE ("computeMovePermutation is always a valid permutation of 0..5", "[Ped
 //==============================================================================
 // PedalType / validity helpers.
 
-TEST_CASE ("isValidPedalType accepts exactly 0..6", "[PedalSlots]")
+TEST_CASE ("isValidPedalType accepts exactly 0..7", "[PedalSlots]")
 {
     for (int i = 0; i < sg::numPedalTypes; ++i)
         CHECK (sg::isValidPedalType (i));
 
     CHECK_FALSE (sg::isValidPedalType (-1));
-    CHECK_FALSE (sg::isValidPedalType (7));
+    CHECK_FALSE (sg::isValidPedalType (sg::numPedalTypes));
 }
 
 TEST_CASE ("isValidSlotIndex accepts exactly 0..5", "[PedalSlots]")
@@ -122,8 +124,12 @@ TEST_CASE ("slotParamId builds the expected ids", "[PedalSlots]")
 
 TEST_CASE ("createPedalInstance never returns null for any PedalType", "[PedalSlots]")
 {
+    // PedalType::plugin builds the passthrough placeholder here -- the real
+    // hosted instance only ever arrives via swapSlotInstance() (see
+    // PedalSlots.h).
     const PedalType types[] = { PedalType::empty, PedalType::screamer, PedalType::echoes,
-                                 PedalType::chamber, PedalType::squeeze, PedalType::wobble, PedalType::shiver };
+                                 PedalType::chamber, PedalType::squeeze, PedalType::wobble,
+                                 PedalType::shiver, PedalType::plugin };
 
     for (auto type : types)
     {
@@ -246,9 +252,23 @@ TEST_CASE ("PedalSlotHost keeps processing correctly after a slot swap (echoes r
     double phase = 0.0;
 
     runBlocks (host, 0, true, params, sampleRate, blockSize, 5, phase, output);
-    host.swapSlot (0, PedalType::echoes, sampleRate, blockSize, 1);
+
+    // The retired instance MUST be held until canRetireSafely() clears it
+    // (see PedalSlots.h's retire-safety contract). This line previously
+    // discarded the returned unique_ptr, deleting the old instance while
+    // the processing side was still about to crossfade FROM it -- a
+    // use-after-free that segfaulted on macOS (whose allocator reuses/
+    // poisons the freed block sooner) and only silently survived on
+    // Windows.
+    auto retired = host.swapSlot (0, PedalType::echoes, sampleRate, blockSize, 1);
+    REQUIRE (retired != nullptr);
+    CHECK_FALSE (host.canRetireSafely (0, retired.get())); // still observable: swap not yet picked up
+
     // Long enough to run well past the crossfade window (~10ms).
     runBlocks (host, 0, true, params, sampleRate, blockSize, 40, phase, output);
+
+    // Fade long finished -> provably unobservable now.
+    CHECK (host.canRetireSafely (0, retired.get()));
 
     // The tail (long after the crossfade has finished) should be non-silent
     // -- proof the new "echoes" instance is genuinely live and processing,
@@ -258,4 +278,179 @@ TEST_CASE ("PedalSlotHost keeps processing correctly after a slot swap (echoes r
         tailPeak = std::max (tailPeak, std::abs (output[i]));
 
     CHECK (tailPeak > 0.05f);
+}
+
+//==============================================================================
+// Retire-safety contract (see PedalSlots.h's retire-safety proof): a retired
+// instance may only be deleted once canRetireSafely() proves the processing
+// side can no longer observe it.
+
+TEST_CASE ("canRetireSafely tracks a retired instance through pickup, fade, and completion", "[PedalSlots]")
+{
+    constexpr double sampleRate = 44100.0;
+    constexpr int blockSize = 256;
+
+    sg::PedalSlotHost host;
+    std::array<sg::PedalType, sg::numSlots> types {};
+    types.fill (PedalType::empty);
+    host.prepare (sampleRate, blockSize, 1, types);
+
+    const std::array<float, sg::numParamsPerSlot> params { 0.5f, 0.5f, 0.5f, 0.5f };
+    std::vector<float> output;
+    double phase = 0.0;
+
+    runBlocks (host, 0, true, params, sampleRate, blockSize, 2, phase, output);
+
+    auto retired = host.swapSlot (0, PedalType::echoes, sampleRate, blockSize, 1);
+    REQUIRE (retired != nullptr);
+
+    // Not yet picked up: the processing side's current instance is still
+    // the retired one -- deleting it now is exactly the use-after-free the
+    // macOS CI segfault caught.
+    CHECK_FALSE (host.canRetireSafely (0, retired.get()));
+
+    // One block: swap picked up, crossfade in flight -- the retired
+    // instance is the fade source, still observable.
+    runBlocks (host, 0, true, params, sampleRate, blockSize, 1, phase, output);
+    CHECK_FALSE (host.canRetireSafely (0, retired.get()));
+
+    // Run well past the ~10ms fade: now provably unobservable.
+    runBlocks (host, 0, true, params, sampleRate, blockSize, 10, phase, output);
+    CHECK (host.canRetireSafely (0, retired.get()));
+
+    // An unrelated pointer (a never-installed instance) is trivially safe.
+    auto stranger = sg::createPedalInstance (PedalType::empty, sampleRate, blockSize, 1);
+    CHECK (host.canRetireSafely (0, stranger.get()));
+}
+
+TEST_CASE ("canRetireSafely stays false while processing is stalled -- wall-clock time alone never frees", "[PedalSlots]")
+{
+    // The production bug this guards: a wall-clock grace period elapses
+    // while the host has stopped calling processBlock; the audio thread
+    // then resumes and picks up the swap, crossfading from an
+    // already-deleted instance. canRetireSafely() must keep answering
+    // false for as long as no processing has happened, no matter how much
+    // time passes.
+    constexpr double sampleRate = 44100.0;
+    constexpr int blockSize = 256;
+
+    sg::PedalSlotHost host;
+    std::array<sg::PedalType, sg::numSlots> types {};
+    types.fill (PedalType::empty);
+    host.prepare (sampleRate, blockSize, 1, types);
+
+    auto retired = host.swapSlot (0, PedalType::echoes, sampleRate, blockSize, 1);
+    REQUIRE (retired != nullptr);
+
+    // No processSlot() calls at all after the swap -- "stalled host".
+    for (int i = 0; i < 100; ++i)
+        CHECK_FALSE (host.canRetireSafely (0, retired.get()));
+}
+
+TEST_CASE ("repeated rapid swaps under continuous processing stay click-free with contract-driven retirement", "[PedalSlots]")
+{
+    // Hammer the swap path the way the production GC drives it: keep
+    // processing continuously, swap the slot's type every couple of blocks
+    // (often mid-crossfade), and delete retired instances the moment
+    // canRetireSafely() allows -- exercising pickup-while-fading,
+    // never-observed retirees, and deferred deletion in one loop.
+    constexpr double sampleRate = 44100.0;
+    constexpr int blockSize = 256;
+
+    sg::PedalSlotHost host;
+    std::array<sg::PedalType, sg::numSlots> types {};
+    types.fill (PedalType::empty);
+    host.prepare (sampleRate, blockSize, 1, types);
+
+    const std::array<float, sg::numParamsPerSlot> params { 0.5f, 0.5f, 0.5f, 0.5f };
+    const PedalType cycle[] = { PedalType::echoes, PedalType::empty, PedalType::chamber,
+                                 PedalType::screamer, PedalType::empty, PedalType::wobble };
+
+    std::vector<std::unique_ptr<sg::PedalInstance>> retired;
+    std::vector<float> output;
+    double phase = 0.0;
+
+    for (int swap = 0; swap < 24; ++swap)
+    {
+        retired.push_back (host.swapSlot (0, cycle[(std::size_t) (swap % 6)], sampleRate, blockSize, 1));
+
+        // A couple of blocks -- deliberately SHORTER than the ~10ms fade at
+        // 44.1kHz (441 samples), so the next swap always lands mid-fade.
+        runBlocks (host, 0, true, params, sampleRate, blockSize, 2, phase, output);
+
+        // Production-style GC: free exactly those retirees the host proves
+        // unobservable, keep the rest.
+        retired.erase (std::remove_if (retired.begin(), retired.end(),
+                           [&host] (const std::unique_ptr<sg::PedalInstance>& p)
+                           { return host.canRetireSafely (0, p.get()); }),
+                       retired.end());
+    }
+
+    // Drain: run well past the last fade, then everything must be
+    // retirable.
+    runBlocks (host, 0, true, params, sampleRate, blockSize, 20, phase, output);
+    retired.erase (std::remove_if (retired.begin(), retired.end(),
+                       [&host] (const std::unique_ptr<sg::PedalInstance>& p)
+                       { return host.canRetireSafely (0, p.get()); }),
+                   retired.end());
+    CHECK (retired.empty());
+
+    // And the whole ride must have stayed click-free (same first-difference
+    // bound as the single-swap test above).
+    float maxAbsDelta = 0.0f;
+    for (std::size_t i = 1; i < output.size(); ++i)
+        maxAbsDelta = std::max (maxAbsDelta, std::abs (output[i] - output[i - 1]));
+
+    CHECK (maxAbsDelta < 0.35f); // screamer/chamber legs are hotter than a bare sine; still nowhere near a glitch
+}
+
+TEST_CASE ("swapSlotInstance injects a prepared instance with the same crossfade/retire contract", "[PedalSlots]")
+{
+    // The hosted-plugin injection point (see PluginHosting.h): a
+    // caller-built instance swapped in via swapSlotInstance() must behave
+    // exactly like a swapSlot()-built one -- crossfaded in, old instance
+    // retired under the canRetireSafely() contract.
+    constexpr double sampleRate = 44100.0;
+    constexpr int blockSize = 256;
+
+    struct GainHalfPedal final : sg::PedalInstance
+    {
+        void process (juce::AudioBuffer<float>& buffer) noexcept override { buffer.applyGain (0.5f); }
+        void setEnabled (bool) noexcept override {}
+        void setParam (int, float) noexcept override {}
+    };
+
+    sg::PedalSlotHost host;
+    std::array<sg::PedalType, sg::numSlots> types {};
+    types.fill (PedalType::empty);
+    host.prepare (sampleRate, blockSize, 1, types);
+
+    const std::array<float, sg::numParamsPerSlot> params { 0.5f, 0.5f, 0.5f, 0.5f };
+    std::vector<float> output;
+    double phase = 0.0;
+
+    runBlocks (host, 0, true, params, sampleRate, blockSize, 5, phase, output);
+
+    auto retired = host.swapSlotInstance (0, std::make_unique<GainHalfPedal>());
+    REQUIRE (retired != nullptr);
+    CHECK_FALSE (host.canRetireSafely (0, retired.get()));
+
+    runBlocks (host, 0, true, params, sampleRate, blockSize, 40, phase, output);
+    CHECK (host.canRetireSafely (0, retired.get()));
+
+    // Well after the fade, the injected instance is genuinely processing:
+    // the 0.5-amplitude sine comes out at ~0.25 peak.
+    float tailPeak = 0.0f;
+    for (std::size_t i = output.size() - blockSize; i < output.size(); ++i)
+        tailPeak = std::max (tailPeak, std::abs (output[i]));
+
+    CHECK (tailPeak > 0.2f);
+    CHECK (tailPeak < 0.3f);
+
+    // No click across the whole run either.
+    float maxAbsDelta = 0.0f;
+    for (std::size_t i = 1; i < output.size(); ++i)
+        maxAbsDelta = std::max (maxAbsDelta, std::abs (output[i] - output[i - 1]));
+
+    CHECK (maxAbsDelta < 0.2f);
 }

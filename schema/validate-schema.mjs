@@ -32,13 +32,25 @@ async function main() {
     {
       name: "stateChanged (valid)",
       ok: true,
-      data: { type: "stateChanged", schemaVersion: 3, params: { outputGain: 0.75 } },
+      data: { type: "stateChanged", schemaVersion: 5, params: { outputGain: 0.75 } },
     },
     {
       name: "stateChanged (wrong schemaVersion)",
       ok: false,
       data: { type: "stateChanged", schemaVersion: 1, params: { outputGain: 0.75 } },
     },
+    { name: "requestPluginScan (valid)", ok: true, data: { type: "requestPluginScan" } },
+    { name: "setSlotPlugin (valid)", ok: true, data: { type: "setSlotPlugin", slot: 2, pluginId: "VST3-abc123" } },
+    { name: "setSlotPlugin (missing pluginId)", ok: false, data: { type: "setSlotPlugin", slot: 2 } },
+    { name: "openPluginEditor (valid)", ok: true, data: { type: "openPluginEditor", slot: 0 } },
+    { name: "openPluginEditor (slot out of range)", ok: false, data: { type: "openPluginEditor", slot: 6 } },
+    {
+      name: "pluginScanProgress (valid)",
+      ok: true,
+      data: { type: "pluginScanProgress", done: 3, total: 12, currentName: "SomeVerb" },
+    },
+    { name: "pluginScanDone (valid)", ok: true, data: { type: "pluginScanDone", found: 4, failed: ["BadPlugin"] } },
+    { name: "pluginScanDone (missing failed)", ok: false, data: { type: "pluginScanDone", found: 4 } },
     { name: "unknown message type", ok: false, data: { type: "flarb" } },
   ];
 

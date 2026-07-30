@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 
 #include "ContentInstaller.h"
+#include "PluginSlotCore.h"
 #include "StateMigration.h"
 
 #include <algorithm>
@@ -33,9 +34,16 @@ namespace
     // match sg::PedalType exactly (index == the enum's underlying value).
     const juce::StringArray& pedalTypeChoiceNames()
     {
-        static const juce::StringArray names { "Empty", "Screamer", "Echoes", "Chamber", "Squeeze", "Wobble", "Shiver" };
+        static const juce::StringArray names { "Empty", "Screamer", "Echoes", "Chamber", "Squeeze", "Wobble", "Shiver", "Plugin" };
         return names;
     }
+
+    // State-tree property names for a type-7 (hosted plugin) slot's
+    // identity/state -- the namModelPath pattern, per slot (see
+    // PluginProcessor.h's class-level comment).
+    juce::String slotPluginIdProperty (int slot) { return sg::slotParamId (slot, "PluginId"); }
+    juce::String slotPluginStateProperty (int slot) { return sg::slotParamId (slot, "PluginState"); }
+    juce::String slotPluginNameProperty (int slot) { return sg::slotParamId (slot, "PluginName"); }
 
     // Default slot occupants on a fresh install: the old fixed trio filling
     // the first three physical slots (screamer, echoes, chamber), the rest
@@ -87,6 +95,12 @@ SimpleGuitarAudioProcessor::SimpleGuitarAudioProcessor()
     // startup, not just a true first run.
     sg::installBundledContent();
 
+    // Load the persisted plugin cache (plugins.xml). This is NOT a scan --
+    // scanning only ever runs on an explicit requestPluginScan (see the
+    // class-level comment); this just makes previously-scanned plugins
+    // available immediately.
+    pluginScanner.loadCacheFromDisk();
+
     // Baseline for dirty-tracking (see the class-level comment): freshly
     // constructed, at the default param values, reads as "not dirty".
     refreshDirtyBaseline();
@@ -97,6 +111,10 @@ SimpleGuitarAudioProcessor::SimpleGuitarAudioProcessor()
 SimpleGuitarAudioProcessor::~SimpleGuitarAudioProcessor()
 {
     stopTimer();
+
+    // Hosted editor windows must never outlive their instances (which die
+    // with slotHost / retiringPedals during member destruction below).
+    closeAllPluginEditors();
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout SimpleGuitarAudioProcessor::createParameterLayout()
@@ -225,6 +243,18 @@ void SimpleGuitarAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     inputTrimGain.prepare (sampleRate, samplesPerBlock, numChannels);
     gate.prepare (sampleRate, samplesPerBlock, numChannels);
 
+    // Hosted plugin slots: slotHost.prepare() below deletes every slot's
+    // current instance directly (processing is guaranteed stopped), which
+    // includes any live hosted instance -- capture their state first so a
+    // sample-rate/block-size change doesn't lose plugin settings, and drop
+    // the editors/live pointers that would otherwise dangle. (Editor
+    // windows only ever exist when the user opened them from the bridge,
+    // i.e. on the message thread -- the same thread hosts call
+    // prepareToPlay() on.)
+    captureAllPluginSlotStates();
+    closeAllPluginEditors();
+    livePluginPedal.fill (nullptr);
+
     std::array<sg::PedalType, sg::numSlots> types {};
     for (int slot = 0; slot < sg::numSlots; ++slot)
     {
@@ -234,6 +264,12 @@ void SimpleGuitarAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     }
     slotHost.prepare (sampleRate, samplesPerBlock, numChannels, types);
     slotHostPrepared = true;
+
+    // Type-7 slots got their passthrough placeholder above -- start the
+    // async builds of the real hosted instances at the new rate/block size.
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+        if (getSlotType (slot) == (int) sg::PedalType::plugin)
+            rebuildPluginSlot (slot);
 
     nam.prepare (sampleRate, samplesPerBlock);
     postEq.prepare (sampleRate, samplesPerBlock, numChannels);
@@ -355,15 +391,36 @@ void SimpleGuitarAudioProcessor::applySlotTypeIfChanged (int slot)
     if (currentType == lastKnownSlotType[(std::size_t) slot])
         return;
 
+    const int previousType = lastKnownSlotType[(std::size_t) slot];
     lastKnownSlotType[(std::size_t) slot] = currentType;
+
+    constexpr int pluginType = (int) sg::PedalType::plugin;
+
+    if (previousType == pluginType && currentType != pluginType)
+    {
+        // Leaving type 7: the hosted occupant is replaced for good --
+        // clear the persisted identity/state (invariant: only type-7 slots
+        // carry slot{N}PluginId/State/Name) and invalidate any in-flight
+        // async build.
+        slotPluginId[(std::size_t) slot].clear();
+        slotPluginStateB64[(std::size_t) slot].clear();
+        slotPluginName[(std::size_t) slot].clear();
+        builtPluginId[(std::size_t) slot].clear();
+        builtPluginStateB64[(std::size_t) slot].clear();
+        slotPluginMissing[(std::size_t) slot] = false;
+        ++slotPluginBuildGeneration[(std::size_t) slot];
+        writeSlotPluginProperties (slot);
+    }
 
     if (! slotHostPrepared)
         return; // nothing to rebuild yet -- prepareToPlay()'s own initial build already uses the current values.
 
     auto retired = slotHost.swapSlot (slot, (sg::PedalType) currentType,
                                        preparedSampleRate, preparedBlockSize, preparedNumChannels);
+    retireSlotInstance (slot, std::move (retired));
 
-    retiringPedals.push_back ({ std::move (retired), juce::Time::getMillisecondCounter() });
+    if (currentType == pluginType)
+        rebuildPluginSlot (slot); // builds from whatever id the bookkeeping holds (empty -> stays a passthrough placeholder)
 }
 
 void SimpleGuitarAudioProcessor::syncAllSlotInstancesFromParams()
@@ -376,10 +433,336 @@ void SimpleGuitarAudioProcessor::collectRetiredPedals()
 {
     const auto now = juce::Time::getMillisecondCounter();
 
+    // Both conditions must hold: the wall-clock grace (hygiene, matches
+    // NamProcessor's retire cadence) AND the audio-thread reachability
+    // proof (see PedalSlots.h's retire-safety comment -- grace alone is
+    // unsafe if the host stops processing right after a swap). An entry
+    // that never becomes safely retirable (audio thread stopped mid-fade)
+    // is simply held until it does, or until destruction/prepare.
     retiringPedals.erase (
         std::remove_if (retiringPedals.begin(), retiringPedals.end(),
-            [now] (const RetiringPedal& r) { return (now - r.retiredAtMs) >= retireGraceMs; }),
+            [now, this] (const RetiringPedal& r)
+            {
+                return (now - r.retiredAtMs) >= retireGraceMs
+                    && slotHost.canRetireSafely (r.slot, r.pedal.get());
+            }),
         retiringPedals.end());
+}
+
+//==============================================================================
+// Hosted third-party plugins (see PluginProcessor.h's class-level comment
+// and PluginHosting.h). All message-thread only.
+
+void SimpleGuitarAudioProcessor::retireSlotInstance (int slot, std::unique_ptr<sg::PedalInstance> retired)
+{
+    // A hosted editor must never outlive its instance -- close before the
+    // instance enters the GC list. (No-ops when the slot has no window /
+    // wasn't hosting.)
+    closePluginEditor (slot);
+    livePluginPedal[(std::size_t) slot] = nullptr;
+
+    if (retired != nullptr)
+        retiringPedals.push_back ({ std::move (retired), slot, juce::Time::getMillisecondCounter() });
+}
+
+void SimpleGuitarAudioProcessor::writeSlotPluginProperties (int slot)
+{
+    const auto writeOrRemove = [this] (const juce::String& property, const juce::String& value)
+    {
+        if (value.isEmpty())
+            apvts.state.removeProperty (property, nullptr);
+        else
+            apvts.state.setProperty (property, value, nullptr);
+    };
+
+    writeOrRemove (slotPluginIdProperty (slot), slotPluginId[(std::size_t) slot]);
+    writeOrRemove (slotPluginStateProperty (slot), slotPluginStateB64[(std::size_t) slot]);
+    writeOrRemove (slotPluginNameProperty (slot), slotPluginName[(std::size_t) slot]);
+}
+
+void SimpleGuitarAudioProcessor::rebuildPluginSlot (int slot)
+{
+    jassert (sg::isValidSlotIndex (slot));
+
+    const int generation = ++slotPluginBuildGeneration[(std::size_t) slot];
+    slotPluginMissing[(std::size_t) slot] = false;
+    builtPluginId[(std::size_t) slot] = slotPluginId[(std::size_t) slot];
+    builtPluginStateB64[(std::size_t) slot] = slotPluginStateB64[(std::size_t) slot];
+
+    if (! slotHostPrepared)
+        return; // prepareToPlay()'s own type-7 rebuild loop covers this once the host exists.
+
+    const auto pluginId = slotPluginId[(std::size_t) slot];
+
+    const auto swapInPlaceholder = [this, slot]
+    {
+        // Only needed if a real hosted instance is currently live -- the
+        // slot otherwise already runs a passthrough placeholder (which is
+        // exactly what "missing: processes as bypass" means).
+        if (livePluginPedal[(std::size_t) slot] != nullptr)
+            retireSlotInstance (slot, slotHost.swapSlot (slot, sg::PedalType::plugin,
+                                                         preparedSampleRate, preparedBlockSize, preparedNumChannels));
+    };
+
+    if (pluginId.isEmpty())
+    {
+        swapInPlaceholder();
+        return;
+    }
+
+    const auto description = pluginScanner.findByIdentifier (pluginId);
+
+    if (description == nullptr)
+    {
+        // Missing plugin: keep id/state/name (it revives if a later scan
+        // finds the plugin again), process as bypass, report on rigState.
+        slotPluginMissing[(std::size_t) slot] = true;
+        swapInPlaceholder();
+        return;
+    }
+
+    juce::WeakReference<SimpleGuitarAudioProcessor> safeThis (this);
+    const auto displayName = description->name;
+
+    pluginScanner.getFormatManager().createPluginInstanceAsync (*description, preparedSampleRate, preparedBlockSize,
+        [safeThis, slot, generation, displayName] (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+        {
+            // Message thread (per createPluginInstanceAsync's contract).
+            auto* self = safeThis.get();
+            if (self == nullptr)
+                return;
+
+            // Stale completion: the slot moved on (new build, type change,
+            // or state restore) while this instance was being created.
+            if (generation != self->slotPluginBuildGeneration[(std::size_t) slot]
+                || self->getSlotType (slot) != (int) sg::PedalType::plugin)
+                return;
+
+            if (instance == nullptr)
+            {
+                self->slotPluginMissing[(std::size_t) slot] = true;
+                self->notifyPluginLoadResult (false, displayName + ": " + error);
+                return;
+            }
+
+            juce::String prepareError;
+            auto pedal = sg::prepareHostedPluginPedal (std::move (instance),
+                                                       self->preparedSampleRate, self->preparedBlockSize,
+                                                       self->preparedNumChannels, prepareError);
+
+            if (pedal == nullptr)
+            {
+                self->slotPluginMissing[(std::size_t) slot] = true;
+                self->notifyPluginLoadResult (false, displayName + ": " + prepareError);
+                return;
+            }
+
+            // Restore the persisted state blob (if any) before the instance
+            // goes live.
+            juce::MemoryBlock stateBlob;
+            if (sg::base64ToStateBlob (self->slotPluginStateB64[(std::size_t) slot], stateBlob) && stateBlob.getSize() > 0)
+                pedal->getInstance()->setStateInformation (stateBlob.getData(), (int) stateBlob.getSize());
+
+            auto* live = pedal.get();
+            self->retireSlotInstance (slot, self->slotHost.swapSlotInstance (slot, std::move (pedal)));
+            self->livePluginPedal[(std::size_t) slot] = live;
+
+            // Hosted latency joins the sum immediately rather than waiting
+            // for the next 15Hz poll tick (which still tracks later
+            // changes).
+            self->updateReportedLatency();
+
+            self->notifyPluginLoadResult (true, "loaded " + displayName);
+        });
+}
+
+void SimpleGuitarAudioProcessor::syncAllPluginSlotsFromBookkeeping()
+{
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+    {
+        if (getSlotType (slot) != (int) sg::PedalType::plugin)
+            continue;
+
+        const auto i = (std::size_t) slot;
+
+        if (builtPluginId[i] != slotPluginId[i])
+        {
+            rebuildPluginSlot (slot); // different plugin -> full rebuild
+        }
+        else if (auto* live = livePluginPedal[i])
+        {
+            // Same plugin, live instance: (re)apply the persisted blob so a
+            // preset/session load resets the plugin to its saved state
+            // without a rebuild.
+            juce::MemoryBlock stateBlob;
+            if (sg::base64ToStateBlob (slotPluginStateB64[i], stateBlob) && stateBlob.getSize() > 0)
+                live->getInstance()->setStateInformation (stateBlob.getData(), (int) stateBlob.getSize());
+
+            builtPluginStateB64[i] = slotPluginStateB64[i];
+        }
+        else if (slotPluginStateB64[i] != builtPluginStateB64[i] || slotPluginMissing[i])
+        {
+            // No live instance (missing, placeholder, or a build still in
+            // flight with an outdated blob) -- rebuild; the generation
+            // counter retires any in-flight build.
+            rebuildPluginSlot (slot);
+        }
+    }
+}
+
+void SimpleGuitarAudioProcessor::captureAllPluginSlotStates()
+{
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+    {
+        auto* live = livePluginPedal[(std::size_t) slot];
+        if (live == nullptr)
+            continue; // no live instance: preserve the stored blob (missing-plugin case)
+
+        juce::MemoryBlock stateBlob;
+        live->getInstance()->getStateInformation (stateBlob);
+
+        const auto encoded = sg::stateBlobToBase64 (stateBlob);
+        slotPluginStateB64[(std::size_t) slot] = encoded;
+        builtPluginStateB64[(std::size_t) slot] = encoded;
+        writeSlotPluginProperties (slot);
+    }
+}
+
+void SimpleGuitarAudioProcessor::notifyPluginLoadResult (bool ok, const juce::String& message)
+{
+    if (onPluginLoadResult)
+        onPluginLoadResult (ok, message);
+}
+
+void SimpleGuitarAudioProcessor::closePluginEditor (int slot)
+{
+    pluginEditorWindows[(std::size_t) slot].reset();
+}
+
+void SimpleGuitarAudioProcessor::closeAllPluginEditors()
+{
+    for (auto& window : pluginEditorWindows)
+        window.reset();
+}
+
+SimpleGuitarAudioProcessor::SlotPluginInfo SimpleGuitarAudioProcessor::getSlotPluginInfo (int slot) const
+{
+    if (! sg::isValidSlotIndex (slot) || getSlotType (slot) != (int) sg::PedalType::plugin)
+        return {};
+
+    SlotPluginInfo info;
+    info.name = slotPluginName[(std::size_t) slot];
+    info.missing = slotPluginMissing[(std::size_t) slot];
+    return info;
+}
+
+bool SimpleGuitarAudioProcessor::setSlotPlugin (int slot, const juce::String& pluginId)
+{
+    if (! sg::isValidSlotIndex (slot) || pluginId.isEmpty())
+        return false;
+
+    const auto description = pluginScanner.findByIdentifier (pluginId);
+    if (description == nullptr)
+        return false; // unknown id -- silently rejected, per the wire contract
+
+    slotPluginId[(std::size_t) slot] = pluginId;
+    slotPluginStateB64[(std::size_t) slot].clear(); // a freshly-picked plugin starts from its own defaults
+    slotPluginName[(std::size_t) slot] = description->name;
+    writeSlotPluginProperties (slot);
+
+    // Same "pick a new pedal for this slot" gesture as setSlotType():
+    // type -> 7, On/P1-4 reset to the flat defaults (P1 = wet/dry, so 0.5
+    // is the equal-power midpoint).
+    auto* typeParam = apvts.getParameter (sg::slotParamId (slot, "Type"));
+    auto* onParam = apvts.getParameter (sg::slotParamId (slot, "On"));
+    auto* p1Param = apvts.getParameter (sg::slotParamId (slot, "P1"));
+    auto* p2Param = apvts.getParameter (sg::slotParamId (slot, "P2"));
+    auto* p3Param = apvts.getParameter (sg::slotParamId (slot, "P3"));
+    auto* p4Param = apvts.getParameter (sg::slotParamId (slot, "P4"));
+
+    if (typeParam == nullptr || onParam == nullptr
+        || p1Param == nullptr || p2Param == nullptr || p3Param == nullptr || p4Param == nullptr)
+        return false; // shouldn't happen -- defensive only
+
+    typeParam->setValueNotifyingHost (typeParam->convertTo0to1 ((float) sg::PedalType::plugin));
+    onParam->setValueNotifyingHost (onParam->convertTo0to1 (1.0f));
+    p1Param->setValueNotifyingHost (p1Param->convertTo0to1 (0.5f));
+    p2Param->setValueNotifyingHost (p2Param->convertTo0to1 (0.5f));
+    p3Param->setValueNotifyingHost (p3Param->convertTo0to1 (0.5f));
+    p4Param->setValueNotifyingHost (p4Param->convertTo0to1 (0.5f));
+
+    if (lastKnownSlotType[(std::size_t) slot] == (int) sg::PedalType::plugin)
+        rebuildPluginSlot (slot); // type unchanged (7 -> 7): applySlotTypeIfChanged would no-op
+    else
+        applySlotTypeIfChanged (slot); // entering type 7 rebuilds with the id we just seeded
+
+    presetDirty.store (true, std::memory_order_relaxed);
+    return true;
+}
+
+bool SimpleGuitarAudioProcessor::openPluginEditor (int slot)
+{
+    if (! sg::isValidSlotIndex (slot))
+        return false;
+
+    if (auto& existing = pluginEditorWindows[(std::size_t) slot])
+    {
+        existing->toFront (true);
+        return true;
+    }
+
+    auto* live = livePluginPedal[(std::size_t) slot];
+    if (live == nullptr)
+        return false; // not a hosted slot / not built yet / missing
+
+    juce::WeakReference<SimpleGuitarAudioProcessor> safeThis (this);
+
+    pluginEditorWindows[(std::size_t) slot] = std::make_unique<sg::PluginEditorWindow> (
+        *live->getInstance(),
+        [safeThis, slot]
+        {
+            // Deferred: destroying the window from inside its own
+            // close-button callback would delete `this` mid-call.
+            juce::MessageManager::callAsync ([safeThis, slot]
+            {
+                if (auto* self = safeThis.get())
+                    self->closePluginEditor (slot);
+            });
+        });
+
+    return true;
+}
+
+bool SimpleGuitarAudioProcessor::startPluginScan (std::function<void (int, int, juce::String)> onProgress,
+                                                  std::function<void (int, juce::StringArray)> onDone)
+{
+    // The scan worker is this very executable relaunched in its hidden
+    // --scan-plugin mode (see StandaloneApp.cpp) -- only meaningful when
+    // running AS the standalone app. In a hosted wrapper the "current
+    // executable" is the DAW, so scanning is unavailable there (the cached
+    // list still works); see the class-level comment.
+    if (! juce::JUCEApplicationBase::isStandaloneApp())
+        return false;
+
+    const auto workerExecutable = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+
+    juce::WeakReference<SimpleGuitarAudioProcessor> safeThis (this);
+
+    return pluginScanner.startScan (workerExecutable,
+        std::move (onProgress),
+        [safeThis, onDone = std::move (onDone)] (int totalKnown, juce::StringArray failedNames)
+        {
+            // A finished scan may have found plugins that missing type-7
+            // slots reference -- revive them before reporting done.
+            if (auto* self = safeThis.get())
+                for (int slot = 0; slot < sg::numSlots; ++slot)
+                    if (self->slotPluginMissing[(std::size_t) slot]
+                        && self->getSlotType (slot) == (int) sg::PedalType::plugin)
+                        self->rebuildPluginSlot (slot);
+
+            if (onDone)
+                onDone (totalKnown, failedNames);
+        });
 }
 
 bool SimpleGuitarAudioProcessor::setSlotType (int slot, int pedalType)
@@ -421,12 +804,28 @@ bool SimpleGuitarAudioProcessor::movePedal (int from, int to)
     if (from == to)
         return true; // harmless no-op
 
+    // Live hosted-plugin state must travel with the move -- capture every
+    // live instance's blob into the bookkeeping first, then permute the
+    // bookkeeping alongside the param values below.
+    captureAllPluginSlotStates();
+
     struct SlotValues
     {
         float type, on, p1, p2, p3, p4;
     };
 
+    struct SlotPluginValues
+    {
+        juce::String id, stateB64, name;
+    };
+
     std::array<SlotValues, sg::numSlots> snapshot {};
+    std::array<SlotPluginValues, sg::numSlots> pluginSnapshot {};
+
+    for (int i = 0; i < sg::numSlots; ++i)
+        pluginSnapshot[(std::size_t) i] = { slotPluginId[(std::size_t) i],
+                                            slotPluginStateB64[(std::size_t) i],
+                                            slotPluginName[(std::size_t) i] };
 
     for (int i = 0; i < sg::numSlots; ++i)
     {
@@ -465,10 +864,28 @@ bool SimpleGuitarAudioProcessor::movePedal (int from, int to)
         p4Param->setValueNotifyingHost (p4Param->convertTo0to1 (src.p4));
     }
 
+    // Plugin identity/state moves with the pedal too (the invariant that
+    // only type-7 slots carry these strings holds across any permutation,
+    // since the strings travel together with their type value). Written
+    // BEFORE the type sync below so an entering-type-7 rebuild sees the
+    // right id.
+    for (int i = 0; i < sg::numSlots; ++i)
+    {
+        const auto& src = pluginSnapshot[(std::size_t) perm[(std::size_t) i]];
+        slotPluginId[(std::size_t) i] = src.id;
+        slotPluginStateB64[(std::size_t) i] = src.stateB64;
+        slotPluginName[(std::size_t) i] = src.name;
+        writeSlotPluginProperties (i);
+    }
+
     // Rebuild whichever slots' TYPE value actually ended up different --
     // no-op for any slot whose type happened to land back on itself.
     for (int i = 0; i < sg::numSlots; ++i)
         applySlotTypeIfChanged (i);
+
+    // Backstop for 7 -> 7 moves (type unchanged, different plugin/state):
+    // rebuild/reapply whatever the type sync above didn't cover.
+    syncAllPluginSlotsFromBookkeeping();
 
     presetDirty.store (true, std::memory_order_relaxed);
     return true;
@@ -662,6 +1079,16 @@ void SimpleGuitarAudioProcessor::requestLoadIrInternal (const juce::String& path
 
 void SimpleGuitarAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
+    // Refresh the hosted-plugin state blobs so the serialized state carries
+    // each live instance's CURRENT settings. Guarded to the message thread:
+    // hosts may call getStateInformation from other threads, where touching
+    // live instances/the state tree's properties wouldn't be safe -- those
+    // callers get the most recently captured blobs instead (still
+    // consistent, captured on every save/move/prepare).
+    if (auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
+        messageManager != nullptr && messageManager->isThisTheMessageThread())
+        captureAllPluginSlotStates();
+
     const auto state = apvts.copyState();
     const std::unique_ptr<juce::XmlElement> xml (state.createXml());
     copyXmlToBinary (*xml, destData);
@@ -712,11 +1139,27 @@ void SimpleGuitarAudioProcessor::restoreLoadedPathsFromState()
     if (irPath.isNotEmpty() && irPath != currentIrPath)
         requestLoadIrInternal (irPath, nullptr, true);
 
+    // Hosted-plugin bookkeeping from the restored state's properties --
+    // read BEFORE the type sync below, so a slot entering type 7 rebuilds
+    // with the restored plugin id rather than a stale one. (For a v4/legacy
+    // state these properties simply don't exist and everything reads
+    // empty.)
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+    {
+        slotPluginId[(std::size_t) slot] = apvts.state.getProperty (slotPluginIdProperty (slot), "").toString();
+        slotPluginStateB64[(std::size_t) slot] = apvts.state.getProperty (slotPluginStateProperty (slot), "").toString();
+        slotPluginName[(std::size_t) slot] = apvts.state.getProperty (slotPluginNameProperty (slot), "").toString();
+    }
+
     // Pedal slots: the state tree already carries the persisted (or, for a
     // legacy state, migrated -- see StateMigration.h) slot param values
     // verbatim (they just came in via apvts.replaceState()); this only
     // needs to rebuild whichever slots' DSP instances no longer match.
     syncAllSlotInstancesFromParams();
+
+    // ...and rebuild/reapply hosted-plugin slots whose type didn't change
+    // but whose plugin id or state blob did.
+    syncAllPluginSlotsFromBookkeeping();
 
     // Current preset bookkeeping: plain string properties, no filesystem
     // access needed to "restore" them (unlike nam/ir, which must re-run the
@@ -740,6 +1183,10 @@ std::optional<SimpleGuitarAudioProcessor::CurrentPreset> SimpleGuitarAudioProces
 
 bool SimpleGuitarAudioProcessor::writeCurrentStateToPresetFile (const juce::String& name, const juce::File& file, juce::String& outError)
 {
+    // Preset saves are documented message-thread-only -- capture the live
+    // hosted-plugin states unconditionally so the preset carries them.
+    captureAllPluginSlotStates();
+
     const auto state = apvts.copyState();
     const std::unique_ptr<juce::XmlElement> xml (state.createXml());
 

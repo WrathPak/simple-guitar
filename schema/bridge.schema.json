@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simpleguitar.app/schema/bridge.schema.json",
   "title": "BridgeMessage",
-  "description": "Simple Guitar C++ <-> React bridge protocol, v4. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.\n\nUnion of every message that can cross the bridge in either direction, discriminated by the `type` field.",
+  "description": "Simple Guitar C++ <-> React bridge protocol, v5. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.\n\nUnion of every message that can cross the bridge in either direction, discriminated by the `type` field.",
   "oneOf": [
     {
       "$ref": "#/$defs/UiToEngineMessage"
@@ -14,10 +14,10 @@
   "$defs": {
     "SchemaVersion": {
       "title": "SchemaVersion",
-      "description": "Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing. M2 wave 3 bumps 3 -> 4: the fixed 3-pedal chainOrder is replaced by 6 generic pedal slots (slot0Type..slot5P4 ParamIds; setSlotType/movePedal messages; rigState.slots replaces rigState.chainOrder).",
+      "description": "Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing. M3 bumps 4 -> 5: hosted third-party VST3 plugins (pedal type 7; requestPluginScan/setSlotPlugin/openPluginEditor messages; pluginScanProgress/pluginScanDone events; rigState.plugins + per-slot pluginName/pluginMissing). The engine always sends 5; 4 remains in the enum only until the UI wave updates its own literals -- once it has, collapse this back to a single-value const 5.",
       "type": "integer",
       "minimum": 0,
-      "const": 4
+      "enum": [4, 5]
     },
     "ParamId": {
       "title": "ParamId",
@@ -53,19 +53,28 @@
     },
     "PedalTypeId": {
       "title": "PedalTypeId",
-      "description": "Identifies what pedal (if any) occupies a slot: 0 empty, 1 screamer, 2 echoes, 3 chamber, 4 squeeze, 5 wobble, 6 shiver. Matches the raw value of the engine's slot{N}Type AudioParameterChoice exactly.",
+      "description": "Identifies what pedal (if any) occupies a slot: 0 empty, 1 screamer, 2 echoes, 3 chamber, 4 squeeze, 5 wobble, 6 shiver, 7 hosted third-party plugin (see setSlotPlugin). Matches the raw value of the engine's slot{N}Type AudioParameterChoice exactly.",
       "type": "integer",
-      "enum": [0, 1, 2, 3, 4, 5, 6]
+      "enum": [0, 1, 2, 3, 4, 5, 6, 7]
     },
     "SlotState": {
       "title": "SlotState",
-      "description": "One pedal slot's current occupant + on/off, as reported on rigState.slots. The slot's four knob values (P1-4) are ordinary ParamIds (slot{N}P1..P4), not repeated here.",
+      "description": "One pedal slot's current occupant + on/off, as reported on rigState.slots. The slot's four knob values (P1-4) are ordinary ParamIds (slot{N}P1..P4), not repeated here. For a type-7 (hosted plugin) slot the engine also sends pluginName (the hosted plugin's display name, or null if no plugin has been picked yet) and pluginMissing (true if the slot references a plugin id that is no longer installed/scanned -- the slot keeps its id + saved state and processes as a bypass until the plugin returns); both are omitted for every other type.",
       "type": "object",
       "properties": {
         "type": {
           "$ref": "#/$defs/PedalTypeId"
         },
         "on": {
+          "type": "boolean"
+        },
+        "pluginName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pluginMissing": {
           "type": "boolean"
         }
       },
@@ -203,6 +212,60 @@
       ],
       "additionalProperties": false
     },
+    "RequestPluginScan": {
+      "title": "RequestPluginScan",
+      "description": "UI -> engine. Starts a scan of the standard VST3 locations (plus any user-added folders persisted in the engine's plugin cache) for hostable plugins. Scanning is out-of-process (one child process per candidate file, so a crashing plugin can't take the app down), incremental (files already in the cache with unchanged timestamps are skipped), and never runs at startup -- only in response to this message. The engine sends pluginScanProgress events while scanning and a single pluginScanDone when finished, followed by a fresh rigState (with the updated plugins list). Ignored if a scan is already running. In a hosted (non-standalone) build the child-process worker is unavailable and the engine replies immediately with pluginScanDone over the existing cache.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "requestPluginScan"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "SetSlotPlugin": {
+      "title": "SetSlotPlugin",
+      "description": "UI -> engine. Puts the scanned plugin identified by pluginId (a PluginEntry.id from rigState.plugins) into the given slot: sets the slot's type to 7, resets on/P1-4 to the flat defaults (true/0.5 -- P1 is the engine-side wet/dry mix, so 0.5 is the equal-power midpoint), and starts building the plugin instance asynchronously on the message thread. The engine echoes a fresh rigState immediately (the slot may briefly report its previous/empty occupant until the instance finishes building; a loadResult kind:\"plugin\" + another rigState follow when the build resolves). slot out of range or an unknown pluginId is silently rejected -- no state change, no reply.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "setSlotPlugin"
+        },
+        "slot": {
+          "$ref": "#/$defs/SlotIndex"
+        },
+        "pluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "slot",
+        "pluginId"
+      ],
+      "additionalProperties": false
+    },
+    "OpenPluginEditor": {
+      "title": "OpenPluginEditor",
+      "description": "UI -> engine. Opens (or refocuses) the hosted plugin's own editor in a native floating window above the app -- the one sanctioned native-window exception. At most one window per slot; the engine closes it automatically when the slot's plugin/type changes or the slot is removed, and closes all of them on shutdown. Silently ignored if the slot isn't a type-7 slot with a live plugin instance.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "openPluginEditor"
+        },
+        "slot": {
+          "$ref": "#/$defs/SlotIndex"
+        }
+      },
+      "required": [
+        "type",
+        "slot"
+      ],
+      "additionalProperties": false
+    },
     "LoadPreset": {
       "title": "LoadPreset",
       "description": "UI -> engine. Load a .sgpreset file. path must be an absolute path inside the managed Presets library folder; the engine rejects anything else. Restores model/IR/chain order/params via the same code path as a DAW session restore. The engine responds with a presetResult followed by a fresh presetsState once the load completes (success or failure).",
@@ -316,6 +379,15 @@
         },
         {
           "$ref": "#/$defs/MovePedal"
+        },
+        {
+          "$ref": "#/$defs/RequestPluginScan"
+        },
+        {
+          "$ref": "#/$defs/SetSlotPlugin"
+        },
+        {
+          "$ref": "#/$defs/OpenPluginEditor"
         },
         {
           "$ref": "#/$defs/LoadPreset"
@@ -434,9 +506,85 @@
       ],
       "additionalProperties": false
     },
+    "PluginEntry": {
+      "title": "PluginEntry",
+      "description": "One scanned, hostable plugin, as reported on rigState.plugins. id is the engine's stable identifier for the plugin (KnownPluginList identifier string) -- pass it back verbatim in setSlotPlugin; treat it as opaque.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "vendor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "vendor"
+      ],
+      "additionalProperties": false
+    },
+    "PluginScanProgress": {
+      "title": "PluginScanProgress",
+      "description": "Engine -> UI. Progress of a running plugin scan (see requestPluginScan): done of total candidate files handled so far, and the name (file stem) of the candidate currently being scanned.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "pluginScanProgress"
+        },
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "currentName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "done",
+        "total",
+        "currentName"
+      ],
+      "additionalProperties": false
+    },
+    "PluginScanDone": {
+      "title": "PluginScanDone",
+      "description": "Engine -> UI. A plugin scan has finished. found is the total number of hostable plugins now known (the full cache, not just newly added); failed lists the names (file stems) of candidates that crashed or failed to scan this run -- those files are blacklisted and skipped on future scans. Always followed by a fresh rigState carrying the updated plugins list.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "pluginScanDone"
+        },
+        "found": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "found",
+        "failed"
+      ],
+      "additionalProperties": false
+    },
     "RigState": {
       "title": "RigState",
-      "description": "Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any), the 6 pedal slots' type + on/off, and the managed library contents. Sent on page load, after any loadNamModel/loadIr/setSlotType/movePedal completes, and in reply to requestRigState.",
+      "description": "Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any), the 6 pedal slots' type + on/off (+ hosted-plugin info for type-7 slots), the managed library contents, and the scanned plugins list (sorted by name). Sent on page load, after any loadNamModel/loadIr/setSlotType/movePedal/setSlotPlugin completes, after pluginScanDone, and in reply to requestRigState. plugins is always sent by the current engine; it is optional in the schema only so the previous UI wave's v4 literals keep typechecking until the UI wave lands -- mark it required once it has.",
       "type": "object",
       "properties": {
         "type": {
@@ -470,6 +618,12 @@
         },
         "library": {
           "$ref": "#/$defs/RigLibrary"
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginEntry"
+          }
         }
       },
       "required": [
@@ -485,16 +639,17 @@
     },
     "LoadResultKind": {
       "title": "LoadResultKind",
-      "description": "Which loader a loadResult reports on.",
+      "description": "Which loader a loadResult reports on. \"plugin\" reports the async build of a hosted-plugin slot instance (setSlotPlugin, or a state/preset restore reviving one).",
       "type": "string",
       "enum": [
         "nam",
-        "ir"
+        "ir",
+        "plugin"
       ]
     },
     "LoadResult": {
       "title": "LoadResult",
-      "description": "Engine -> UI. Outcome of a loadNamModel or loadIr request. message is a human-readable success/failure description (e.g. the resolved model name, or an error). Always followed by a rigState with the up-to-date snapshot.",
+      "description": "Engine -> UI. Outcome of a loadNamModel or loadIr request, or of a hosted-plugin slot instance build (kind: \"plugin\" -- e.g. a plugin that can't do stereo-in/stereo-out is rejected here with a clear message). message is a human-readable success/failure description (e.g. the resolved model name, or an error). Always followed by a rigState with the up-to-date snapshot.",
       "type": "object",
       "properties": {
         "type": {
@@ -595,6 +750,12 @@
         },
         {
           "$ref": "#/$defs/LoadResult"
+        },
+        {
+          "$ref": "#/$defs/PluginScanProgress"
+        },
+        {
+          "$ref": "#/$defs/PluginScanDone"
         },
         {
           "$ref": "#/$defs/PresetsState"

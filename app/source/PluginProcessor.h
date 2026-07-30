@@ -19,6 +19,7 @@
 #include <sg/PostEq.h>
 
 #include "PedalSlots.h"
+#include "PluginHosting.h"
 #include "PresetStore.h"
 #include "RigLibrary.h"
 
@@ -100,6 +101,43 @@
     compensation still works for a headless host or pluginval run with no
     editor open) rather than from a parameter listener callback, which JUCE
     may invoke from the audio thread for host automation.
+
+    Hosted third-party plugins (M3, see PluginHosting.h): pedal type 7 is a
+    hosted VST3 plugin. WHICH plugin occupies a type-7 slot is not a host
+    param -- it lives in per-slot state-tree properties (the namModelPath
+    pattern): slot{N}PluginId (KnownPluginList identifier string),
+    slot{N}PluginState (base64 state blob captured from the hosted
+    instance's getStateInformation on every save), and slot{N}PluginName
+    (display name, kept so a missing plugin can still be reported by name).
+    P1 is the engine-side equal-power wet/dry mix around the plugin (see
+    sg::equalPowerWetDry); P2-P4 are unused; slot{N}On bypasses as usual
+    (hard passthrough -- the hosted plugin is not run while bypassed).
+
+    Instance lifecycle mirrors the built-in pedals': the instance is built
+    asynchronously on the message thread
+    (AudioPluginFormatManager::createPluginInstanceAsync), bus-configured
+    stereo/stereo + prepared (plugins that can't do stereo in/out are
+    rejected with a loadResult-style error), then atomically swapped in
+    with the same crossfade (PedalSlotHost::swapSlotInstance()) and retired
+    through the same deferred GC list -- with the extra rule that a hosted
+    instance's editor window is closed before its instance can retire. A
+    preset/session referencing a plugin that isn't installed loads fine:
+    the slot comes up as "missing" (a passthrough placeholder processes in
+    its place; the id/state properties are kept so the plugin revives on a
+    later scan), reported per-slot on rigState. Hosted-instance latency
+    joins the ordinary latency sum via PedalInstance::getLatencySamples(),
+    refreshed by the same 15Hz poll (hosted latency can change at runtime).
+
+    Scanning (see PluginHosting.h's PluginScanner) is opt-in only
+    (startPluginScan(), driven by the bridge's requestPluginScan) and
+    out-of-process: the Standalone executable relaunches itself per
+    candidate in a hidden --scan-plugin mode, so a crashing plugin kills
+    the child, never the app. Results persist to
+    Documents/Simple Guitar/plugins.xml (loaded once at construction);
+    crashers are blacklisted there and skipped on rescan. In a hosted
+    (non-standalone) wrapper there is no scan-worker executable to launch,
+    so startPluginScan() reports "unavailable" -- previously scanned
+    plugins still load from the cache.
 
     Presets (see PresetStore.h and the preset-manager section below): a flat
     library of *.sgpreset files under Documents/Simple Guitar/Presets,
@@ -289,6 +327,54 @@ public:
     bool movePedal (int from, int to);
 
     //==========================================================================
+    // Hosted third-party plugins. See the class-level comment above and
+    // PluginHosting.h. Everything here is message-thread only.
+
+    /** Per-slot hosted-plugin info for the bridge's rigState. name is empty
+        for a non-plugin slot or a type-7 slot with no plugin picked;
+        missing is true only for a type-7 slot whose persisted plugin id
+        isn't in the scanned list (or whose instance build failed). */
+    struct SlotPluginInfo
+    {
+        juce::String name;
+        bool missing = false;
+    };
+
+    SlotPluginInfo getSlotPluginInfo (int slot) const;
+
+    /** All scanned plugins, sorted by name -- rigState's plugins list. */
+    juce::Array<juce::PluginDescription> getScannedPluginsSortedByName() const { return pluginScanner.getPluginsSortedByName(); }
+
+    /** Puts the scanned plugin identified by `pluginId` into `slot`: sets
+        the slot's type to 7 (resetting On/P1-4 to the flat defaults, same
+        gesture semantics as setSlotType()), persists the id, and starts the
+        async instance build. Returns false (no-op) for an out-of-range slot
+        or an unknown id. */
+    bool setSlotPlugin (int slot, const juce::String& pluginId);
+
+    /** Opens (or refocuses) the hosted plugin's own editor in a floating
+        native window -- the sanctioned native-window exception. One window
+        per slot max; closed automatically on slot type/plugin change and
+        shutdown. Returns false (no-op) if the slot has no live hosted
+        instance. */
+    bool openPluginEditor (int slot);
+
+    /** Starts an out-of-process plugin scan (see the class-level comment).
+        Callbacks fire on the message thread. Returns false if a scan is
+        already running or no scan-worker executable is available (hosted
+        wrapper). */
+    bool startPluginScan (std::function<void (int done, int total, juce::String currentName)> onProgress,
+                          std::function<void (int totalKnown, juce::StringArray failedNames)> onDone);
+
+    bool isPluginScanning() const noexcept { return pluginScanner.isScanning(); }
+
+    /** Bridge hook: fired on the message thread whenever a hosted-plugin
+        instance build resolves (ok or not) -- the bridge forwards it as a
+        loadResult kind:"plugin" + fresh rigState. Overwritten by each new
+        bridge; cleared on bridge destruction. */
+    void setOnPluginLoadResult (std::function<void (bool ok, juce::String message)> callback) { onPluginLoadResult = std::move (callback); }
+
+    //==========================================================================
     // Presets. See PresetStore.h for the on-disk format and the class-level
     // comment above for the dirty-tracking design. Message-thread only --
     // same rule as the NAM/IR loaders and setSlotType/movePedal above.
@@ -379,10 +465,57 @@ private:
         call. Message thread only; may allocate. */
     void syncAllSlotInstancesFromParams();
 
-    /** Deletes any retiringPedals entry whose grace period has elapsed.
-        Message-thread only (never the audio thread) -- run from the same
-        low-rate timer as updateReportedLatency() below. */
+    /** Deletes any retiringPedals entry whose grace period has elapsed AND
+        that the audio thread provably can no longer observe
+        (PedalSlotHost::canRetireSafely() -- see PedalSlots.h's retire-safety
+        proof; the wall-clock grace alone is not sufficient when the host
+        stops processing right after a swap). Message-thread only (never the
+        audio thread) -- run from the same low-rate timer as
+        updateReportedLatency() below. */
     void collectRetiredPedals();
+
+    //==========================================================================
+    // Hosted-plugin internals (all message-thread only; see the class-level
+    // comment and PluginHosting.h).
+
+    /** Retires the current live instance of `slot` through the deferred GC
+        list, closing the slot's plugin editor window first (a hosted
+        editor must never outlive its instance) and clearing the
+        live-hosted bookkeeping. `retired` is the pointer swapSlot/
+        swapSlotInstance just returned. */
+    void retireSlotInstance (int slot, std::unique_ptr<sg::PedalInstance> retired);
+
+    /** (Re)builds `slot`'s hosted instance from the current slotPluginId/
+        State bookkeeping: async createPluginInstanceAsync, stereo bus
+        config + prepare, state-blob restore, crossfade swap-in. Sets the
+        missing flag (and leaves the passthrough placeholder processing)
+        for an unknown id or failed build. Stale async completions are
+        discarded via a per-slot generation counter. No-op before the slot
+        host is prepared (prepareToPlay's own sync covers that). */
+    void rebuildPluginSlot (int slot);
+
+    /** Rebuilds every type-7 slot whose bookkeeping (id or state blob)
+        doesn't match what its live instance was built from -- the restore/
+        move/prepare backstop, same spirit as syncAllSlotInstancesFromParams
+        for types. */
+    void syncAllPluginSlotsFromBookkeeping();
+
+    /** Captures the live hosted instance's state into the slot{N}PluginState
+        property (no-op for slots without a live instance, preserving the
+        stored blob of a missing plugin). Called before any state
+        serialization so the saved blob is current. */
+    void captureAllPluginSlotStates();
+
+    /** Mirrors `slot`'s plugin bookkeeping strings onto the
+        slot{N}PluginId/State/Name state-tree properties (removing a
+        property when its string is empty, keeping the tree clean). */
+    void writeSlotPluginProperties (int slot);
+
+    /** Fires onPluginLoadResult (if a bridge is attached). */
+    void notifyPluginLoadResult (bool ok, const juce::String& message);
+
+    void closePluginEditor (int slot);
+    void closeAllPluginEditors();
 
     /** Recomputes and (if changed) reports total plugin latency to the host
         via setLatencySamples(). Message-thread only -- see the class-level
@@ -497,10 +630,45 @@ private:
     struct RetiringPedal
     {
         std::unique_ptr<sg::PedalInstance> pedal;
+        int slot = 0; // which slot retired it -- canRetireSafely() is per-slot
         juce::uint32 retiredAtMs = 0;
     };
     std::vector<RetiringPedal> retiringPedals;
     static constexpr juce::uint32 retireGraceMs = 250; // matches sg::NamProcessor::Impl::kRetireGraceSeconds
+
+    //==========================================================================
+    // Hosted third-party plugins (see the class-level comment and
+    // PluginHosting.h). All message-thread only.
+
+    sg::PluginScanner pluginScanner;
+
+    // Per-slot bookkeeping mirroring the slot{N}PluginId/PluginState/
+    // PluginName state-tree properties (the namModelPath pattern). Nonempty
+    // id implies the slot's type param is 7 (cleared when the type moves
+    // away from 7).
+    std::array<juce::String, sg::numSlots> slotPluginId {};
+    std::array<juce::String, sg::numSlots> slotPluginStateB64 {};
+    std::array<juce::String, sg::numSlots> slotPluginName {};
+
+    // What the slot's LIVE instance (or in-flight build) was built from --
+    // compared against the bookkeeping above by
+    // syncAllPluginSlotsFromBookkeeping() to decide whether a rebuild is
+    // needed after a restore/move.
+    std::array<juce::String, sg::numSlots> builtPluginId {};
+    std::array<juce::String, sg::numSlots> builtPluginStateB64 {};
+
+    std::array<bool, sg::numSlots> slotPluginMissing {};
+    std::array<int, sg::numSlots> slotPluginBuildGeneration {};
+
+    // The slot's live hosted pedal while (and only while) it is the slot
+    // host's active instance -- nulled the moment it's retired. Used for
+    // editor windows and state capture; never dereferenced without a null
+    // check.
+    std::array<sg::HostedPluginPedal*, sg::numSlots> livePluginPedal {};
+
+    std::array<std::unique_ptr<sg::PluginEditorWindow>, sg::numSlots> pluginEditorWindows;
+
+    std::function<void (bool, juce::String)> onPluginLoadResult;
 
     // Message-thread-only bookkeeping of the currently-loaded paths, mirrored
     // onto apvts.state properties so they round-trip through getState/setState.

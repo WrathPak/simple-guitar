@@ -37,10 +37,13 @@ add_executable(sg_tests
   app/StateMigrationTest.cpp
   app/BundledPresetsTest.cpp
   app/ContentInstallerTest.cpp
+  app/PluginHostingCoreTest.cpp
   ../app/source/PresetStore.cpp
   ../app/source/ContentInstallerCore.cpp
   ../app/source/PedalSlots.cpp
   ../app/source/StateMigration.cpp
+  ../app/source/PluginScanCore.cpp
+  ../app/source/PluginSlotCore.cpp
 )
 
 target_link_libraries(sg_tests

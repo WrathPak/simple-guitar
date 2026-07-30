@@ -31,11 +31,19 @@
 namespace sg
 {
 
-/** The seven possible occupants of a pedal slot. Values match
+/** The eight possible occupants of a pedal slot. Values match
     schema/bridge.schema.json's PedalTypeId exactly (also the raw/denormalized
     value AudioProcessorValueTreeState stores for each slot{N}Type
     AudioParameterChoice) -- never renumber these without bumping the bridge
-    schema version and the migration logic in StateMigration.h. */
+    schema version and the migration logic in StateMigration.h.
+
+    `plugin` (7) is a hosted third-party plugin slot: which plugin occupies
+    it lives OUTSIDE the param system, in the slot{N}PluginId/PluginState
+    state-tree properties (see PluginProcessor.h), because a plugin identity
+    isn't a host-automatable value. createPedalInstance (plugin, ...) only
+    ever builds the passthrough placeholder -- the real hosted instance is
+    built asynchronously on the message thread and injected via
+    PedalSlotHost::swapSlotInstance() (see PluginHosting.h). */
 enum class PedalType : int
 {
     empty = 0,
@@ -44,10 +52,11 @@ enum class PedalType : int
     chamber = 3,
     squeeze = 4,
     wobble = 5,
-    shiver = 6
+    shiver = 6,
+    plugin = 7
 };
 
-constexpr int numPedalTypes = 7;
+constexpr int numPedalTypes = 8;
 constexpr int numSlots = 6;
 constexpr int numParamsPerSlot = 4;
 
@@ -155,13 +164,34 @@ std::unique_ptr<PedalInstance> createPedalInstance (PedalType type, double sampl
     audio in parallel (via per-slot scratch buffers sized in prepare()) for
     the duration of the fade. The old instance is never destroyed on the
     audio thread: swapSlot() hands the retired pointer back to the caller,
-    which owns it from that point on and is expected to hold it until a safe
-    grace period has passed (the audio thread may still be reading it for as
-    long as its crossfade -- or a fresh one it's already mid-swap for --
-    takes to complete) before actually deleting it. PluginProcessor does this
-    via a message-thread-only deferred garbage collection list, the same
-    "never delete on the audio thread" rule NamProcessor's loader thread
-    itself follows (see engine/src/NamProcessor.cpp's kRetireGraceSeconds).
+    which owns it from that point on and MUST hold it until
+    canRetireSafely() says the audio thread provably can no longer observe
+    it before actually deleting it. PluginProcessor does this via a
+    message-thread-only deferred garbage collection list, the same "never
+    delete on the audio thread" rule NamProcessor's loader thread itself
+    follows (see engine/src/NamProcessor.cpp's kRetireGraceSeconds).
+
+    Retire-safety proof (canRetireSafely()): a wall-clock grace period alone
+    is NOT sufficient -- the crossfade consumes AUDIO time, so if the host
+    stops calling processBlock right after a swap and resumes later, the
+    audio thread can pick the swap up (and read the retired instance for a
+    whole crossfade) arbitrarily long after any fixed wall-clock delay has
+    elapsed. Instead the audio thread PUBLISHES (release-stores) the only
+    two pointers it can still touch for a slot -- its current instance and
+    its in-flight crossfade source -- at the exact transition points where
+    they change (swap pickup, fade completion). A retired pointer is
+    provably unobservable, and therefore safe to delete, exactly when it is
+    none of: the slot's `active` pointer (the audio thread could still pick
+    it up), the published current, or the published fade source -- because
+    the audio thread only ever acquires instances from `active`, and
+    `fadeFrom` is only ever assigned from its own previous current, so a
+    pointer absent from all three can never re-enter the audio thread's
+    view. The release/acquire pairing makes every audio-thread access to
+    the retired instance happen-before a canRetireSafely()==true
+    observation on the message thread. If the audio thread never runs
+    again, retired instances are simply held (conservatively) until the
+    next prepare() or destruction -- never freed while potentially
+    observable.
 
     Threading model:
       - prepare()/swapSlot() are message-thread only (build/prepare/exchange;
@@ -191,6 +221,16 @@ public:
         Message-thread only; may allocate. */
     std::unique_ptr<PedalInstance> swapSlot (int slot, PedalType type, double sampleRate, int maxBlockSize, int numChannels);
 
+    /** Atomically swaps a caller-built, fully-prepared instance into `slot`
+        -- the injection point for instances createPedalInstance() can't
+        build itself (a hosted third-party plugin, built asynchronously on
+        the message thread; see PluginHosting.h). Identical crossfade/retire
+        contract to swapSlot(): returns the just-retired instance, which the
+        caller owns and must hold through the grace period. `newInstance`
+        must be non-null (hand in an empty/passthrough instance rather than
+        null, same invariant as everywhere else). Message-thread only. */
+    std::unique_ptr<PedalInstance> swapSlotInstance (int slot, std::unique_ptr<PedalInstance> newInstance);
+
     /** Processes one slot's audio in place, driven by the given current
         on/off + four generic knob values. Audio-thread only: no locks, no
         allocation. Transparently handles an in-flight crossfade if a
@@ -206,6 +246,18 @@ public:
         message-thread updateReportedLatency() poll. */
     int getReportedLatencySamples (int slotIndex, bool on) const noexcept;
 
+    /** True once the audio thread provably can no longer observe `retired`
+        in `slot` (see the class-level retire-safety proof): it is neither
+        the slot's published-active instance nor either of the two pointers
+        the audio thread has release-published as still in use (its current
+        instance and its in-flight crossfade source). Callers holding a
+        retired instance poll this from the message thread and only delete
+        once it returns true (PluginProcessor::collectRetiredPedals()).
+        Message-thread use (any non-audio thread is safe -- acquire loads
+        only). Returns true for out-of-range slots (nothing can observe
+        anything there). */
+    bool canRetireSafely (int slotIndex, const PedalInstance* retired) const noexcept;
+
     /** ~10ms, matches sg::NamProcessor's own crossfade window. */
     static constexpr double crossfadeSeconds = 0.010;
 
@@ -214,11 +266,21 @@ private:
     {
         std::atomic<PedalInstance*> active { nullptr };
 
-        // Audio-thread-only state below: never touched by any other thread.
+        // Audio-thread-only state below (audioThreadCurrent/fadeFrom/
+        // crossfade counters/scratch): never touched by any other thread.
         PedalInstance* audioThreadCurrent = nullptr;
         PedalInstance* fadeFrom = nullptr;
         int crossfadeLength = 1;
         int crossfadeRemaining = 0;
+
+        // Release-published mirrors of audioThreadCurrent/fadeFrom, written
+        // by the audio thread at the swap-pickup and fade-completion
+        // transition points and acquire-read by canRetireSafely() on the
+        // message thread (see the class-level retire-safety proof).
+        // prepare() (re)seeds them directly -- processing is guaranteed
+        // stopped there.
+        std::atomic<PedalInstance*> publishedCurrent { nullptr };
+        std::atomic<PedalInstance*> publishedFadeFrom { nullptr };
 
         juce::AudioBuffer<float> fadeFromScratch, fadeToScratch;
     };

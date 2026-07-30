@@ -193,6 +193,7 @@ std::unique_ptr<PedalInstance> createPedalInstance (PedalType type, double sampl
         }
 
         case PedalType::empty:
+        case PedalType::plugin: // placeholder only -- the real hosted instance arrives later via swapSlotInstance() (see PedalSlots.h)
         default:
             return std::make_unique<EmptyPedal>();
     }
@@ -230,6 +231,11 @@ void PedalSlotHost::prepare (double sampleRate, int maxBlockSize, int numChannel
         slot.crossfadeRemaining = 0;
         slot.crossfadeLength = crossfadeLength;
 
+        // Reseed the retire-safety mirrors (see PedalSlots.h): processing is
+        // guaranteed stopped during prepare(), so plain stores are fine.
+        slot.publishedCurrent.store (published, std::memory_order_release);
+        slot.publishedFadeFrom.store (nullptr, std::memory_order_release);
+
         slot.fadeFromScratch.setSize (numChannels, maxBlockSize);
         slot.fadeToScratch.setSize (numChannels, maxBlockSize);
     }
@@ -247,6 +253,18 @@ std::unique_ptr<PedalInstance> PedalSlotHost::swapSlot (int slotIndex, PedalType
     return std::unique_ptr<PedalInstance> (old);
 }
 
+std::unique_ptr<PedalInstance> PedalSlotHost::swapSlotInstance (int slotIndex, std::unique_ptr<PedalInstance> newInstance)
+{
+    jassert (isValidSlotIndex (slotIndex));
+    jassert (newInstance != nullptr); // hand in an empty/passthrough instance, never null
+
+    auto& slot = slots[(std::size_t) slotIndex];
+
+    PedalInstance* published = newInstance.release();
+    PedalInstance* old = slot.active.exchange (published, std::memory_order_acq_rel);
+    return std::unique_ptr<PedalInstance> (old);
+}
+
 void PedalSlotHost::processSlot (int slotIndex, bool on, const std::array<float, numParamsPerSlot>& params, juce::AudioBuffer<float>& buffer) noexcept
 {
     jassert (isValidSlotIndex (slotIndex));
@@ -259,6 +277,16 @@ void PedalSlotHost::processSlot (int slotIndex, bool on, const std::array<float,
         slot.fadeFrom = slot.audioThreadCurrent;
         slot.audioThreadCurrent = latest;
         slot.crossfadeRemaining = slot.crossfadeLength;
+
+        // Publish the swap pickup for the message-thread retire-safety
+        // check (see PedalSlots.h): from here until the fade completes,
+        // BOTH pointers are in use on this thread. publishedFadeFrom must
+        // be stored before publishedCurrent -- if the message thread
+        // observed {current=new} before {fadeFrom=old} landed, it could
+        // momentarily see the old instance in neither slot and free it
+        // mid-fade.
+        slot.publishedFadeFrom.store (slot.fadeFrom, std::memory_order_release);
+        slot.publishedCurrent.store (latest, std::memory_order_release);
     }
 
     auto* current = slot.audioThreadCurrent;
@@ -321,6 +349,40 @@ void PedalSlotHost::processSlot (int slotIndex, bool on, const std::array<float,
     }
 
     slot.crossfadeRemaining = remaining;
+
+    if (remaining <= 0)
+    {
+        // Fade complete: the retiring instance was read for the last time
+        // above -- clear our own reference first, then publish the release
+        // (see PedalSlots.h's retire-safety proof) so the message thread
+        // may free it.
+        slot.fadeFrom = nullptr;
+        slot.publishedFadeFrom.store (nullptr, std::memory_order_release);
+    }
+}
+
+bool PedalSlotHost::canRetireSafely (int slotIndex, const PedalInstance* retired) const noexcept
+{
+    if (! isValidSlotIndex (slotIndex))
+        return true;
+
+    const auto& slot = slots[(std::size_t) slotIndex];
+
+    if (retired == slot.active.load (std::memory_order_acquire))
+        return false; // still the published instance -- the audio thread could pick it up on its next block
+
+    // Load order matters (see PedalSlots.h): publishedCurrent first. If we
+    // observe the swap-pickup's current store, its acquire synchronizes
+    // with the audio thread's (earlier, program-ordered) publishedFadeFrom
+    // store, so the fadeFrom load below can't miss an in-flight fade
+    // source.
+    if (retired == slot.publishedCurrent.load (std::memory_order_acquire))
+        return false; // the audio thread's live instance
+
+    if (retired == slot.publishedFadeFrom.load (std::memory_order_acquire))
+        return false; // mid-crossfade read source
+
+    return true;
 }
 
 int PedalSlotHost::getReportedLatencySamples (int slotIndex, bool on) const noexcept

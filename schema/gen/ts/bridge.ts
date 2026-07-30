@@ -6,7 +6,7 @@
  */
 
 /**
- * Simple Guitar C++ <-> React bridge protocol, v4. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
+ * Simple Guitar C++ <-> React bridge protocol, v5. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
  *
  * Union of every message that can cross the bridge in either direction, discriminated by the `type` field.
  */
@@ -21,6 +21,9 @@ export type UiToEngineMessage =
   | RequestRigState
   | SetSlotType
   | MovePedal
+  | RequestPluginScan
+  | SetSlotPlugin
+  | OpenPluginEditor
   | LoadPreset
   | SavePresetAs
   | SaveCurrentPreset
@@ -88,25 +91,26 @@ export type NormalizedParamValue = number;
  */
 export type SlotIndex = number;
 /**
- * Identifies what pedal (if any) occupies a slot: 0 empty, 1 screamer, 2 echoes, 3 chamber, 4 squeeze, 5 wobble, 6 shiver. Matches the raw value of the engine's slot{N}Type AudioParameterChoice exactly.
+ * Identifies what pedal (if any) occupies a slot: 0 empty, 1 screamer, 2 echoes, 3 chamber, 4 squeeze, 5 wobble, 6 shiver, 7 hosted third-party plugin (see setSlotPlugin). Matches the raw value of the engine's slot{N}Type AudioParameterChoice exactly.
  */
-export type PedalTypeId = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+export type PedalTypeId = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 /**
  * Union of every message the C++ engine may send to the React UI.
  */
-export type EngineToUiMessage = MeterFrame | StateChanged | RigState | LoadResult | PresetsState | PresetResult;
+export type EngineToUiMessage =
+  MeterFrame | StateChanged | RigState | LoadResult | PluginScanProgress | PluginScanDone | PresetsState | PresetResult;
 /**
  * A signal level expressed in dBFS, as reported by a meter tap. Not clamped in the schema since engines may report -inf for digital silence; consumers should treat very negative / non-finite values as silence.
  */
 export type DecibelValue = number;
 /**
- * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing. M2 wave 3 bumps 3 -> 4: the fixed 3-pedal chainOrder is replaced by 6 generic pedal slots (slot0Type..slot5P4 ParamIds; setSlotType/movePedal messages; rigState.slots replaces rigState.chainOrder).
+ * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing. M3 bumps 4 -> 5: hosted third-party VST3 plugins (pedal type 7; requestPluginScan/setSlotPlugin/openPluginEditor messages; pluginScanProgress/pluginScanDone events; rigState.plugins + per-slot pluginName/pluginMissing). The engine always sends 5; 4 remains in the enum only until the UI wave updates its own literals -- once it has, collapse this back to a single-value const 5.
  */
-export type SchemaVersion = 4;
+export type SchemaVersion = 4 | 5;
 /**
- * Which loader a loadResult reports on.
+ * Which loader a loadResult reports on. "plugin" reports the async build of a hosted-plugin slot instance (setSlotPlugin, or a state/preset restore reviving one).
  */
-export type LoadResultKind = "nam" | "ir";
+export type LoadResultKind = "nam" | "ir" | "plugin";
 
 /**
  * UI -> engine. Set a parameter to a new normalized value, e.g. from a knob drag. The engine is the source of truth for the resulting real-world value and will echo it back via stateChanged.
@@ -151,6 +155,27 @@ export interface MovePedal {
   type: "movePedal";
   from: SlotIndex;
   to: SlotIndex;
+}
+/**
+ * UI -> engine. Starts a scan of the standard VST3 locations (plus any user-added folders persisted in the engine's plugin cache) for hostable plugins. Scanning is out-of-process (one child process per candidate file, so a crashing plugin can't take the app down), incremental (files already in the cache with unchanged timestamps are skipped), and never runs at startup -- only in response to this message. The engine sends pluginScanProgress events while scanning and a single pluginScanDone when finished, followed by a fresh rigState (with the updated plugins list). Ignored if a scan is already running. In a hosted (non-standalone) build the child-process worker is unavailable and the engine replies immediately with pluginScanDone over the existing cache.
+ */
+export interface RequestPluginScan {
+  type: "requestPluginScan";
+}
+/**
+ * UI -> engine. Puts the scanned plugin identified by pluginId (a PluginEntry.id from rigState.plugins) into the given slot: sets the slot's type to 7, resets on/P1-4 to the flat defaults (true/0.5 -- P1 is the engine-side wet/dry mix, so 0.5 is the equal-power midpoint), and starts building the plugin instance asynchronously on the message thread. The engine echoes a fresh rigState immediately (the slot may briefly report its previous/empty occupant until the instance finishes building; a loadResult kind:"plugin" + another rigState follow when the build resolves). slot out of range or an unknown pluginId is silently rejected -- no state change, no reply.
+ */
+export interface SetSlotPlugin {
+  type: "setSlotPlugin";
+  slot: SlotIndex;
+  pluginId: string;
+}
+/**
+ * UI -> engine. Opens (or refocuses) the hosted plugin's own editor in a native floating window above the app -- the one sanctioned native-window exception. At most one window per slot; the engine closes it automatically when the slot's plugin/type changes or the slot is removed, and closes all of them on shutdown. Silently ignored if the slot isn't a type-7 slot with a live plugin instance.
+ */
+export interface OpenPluginEditor {
+  type: "openPluginEditor";
+  slot: SlotIndex;
 }
 /**
  * UI -> engine. Load a .sgpreset file. path must be an absolute path inside the managed Presets library folder; the engine rejects anything else. Restores model/IR/chain order/params via the same code path as a DAW session restore. The engine responds with a presetResult followed by a fresh presetsState once the load completes (success or failure).
@@ -213,7 +238,7 @@ export interface ParamValueMap {
   [k: string]: NormalizedParamValue;
 }
 /**
- * Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any), the 6 pedal slots' type + on/off, and the managed library contents. Sent on page load, after any loadNamModel/loadIr/setSlotType/movePedal completes, and in reply to requestRigState.
+ * Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any), the 6 pedal slots' type + on/off (+ hosted-plugin info for type-7 slots), the managed library contents, and the scanned plugins list (sorted by name). Sent on page load, after any loadNamModel/loadIr/setSlotType/movePedal/setSlotPlugin completes, after pluginScanDone, and in reply to requestRigState. plugins is always sent by the current engine; it is optional in the schema only so the previous UI wave's v4 literals keep typechecking until the UI wave lands -- mark it required once it has.
  */
 export interface RigState {
   type: "rigState";
@@ -227,13 +252,16 @@ export interface RigState {
    */
   slots: [SlotState, SlotState, SlotState, SlotState, SlotState, SlotState];
   library: RigLibrary;
+  plugins?: PluginEntry[];
 }
 /**
- * One pedal slot's current occupant + on/off, as reported on rigState.slots. The slot's four knob values (P1-4) are ordinary ParamIds (slot{N}P1..P4), not repeated here.
+ * One pedal slot's current occupant + on/off, as reported on rigState.slots. The slot's four knob values (P1-4) are ordinary ParamIds (slot{N}P1..P4), not repeated here. For a type-7 (hosted plugin) slot the engine also sends pluginName (the hosted plugin's display name, or null if no plugin has been picked yet) and pluginMissing (true if the slot references a plugin id that is no longer installed/scanned -- the slot keeps its id + saved state and processes as a bypass until the plugin returns); both are omitted for every other type.
  */
 export interface SlotState {
   type: PedalTypeId;
   on: boolean;
+  pluginName?: string | null;
+  pluginMissing?: boolean;
 }
 /**
  * Contents of the managed library folders (Documents/Simple Guitar/Models, .../IRs), rescanned each time a rigState is produced.
@@ -250,13 +278,38 @@ export interface LibraryEntry {
   path: string;
 }
 /**
- * Engine -> UI. Outcome of a loadNamModel or loadIr request. message is a human-readable success/failure description (e.g. the resolved model name, or an error). Always followed by a rigState with the up-to-date snapshot.
+ * One scanned, hostable plugin, as reported on rigState.plugins. id is the engine's stable identifier for the plugin (KnownPluginList identifier string) -- pass it back verbatim in setSlotPlugin; treat it as opaque.
+ */
+export interface PluginEntry {
+  id: string;
+  name: string;
+  vendor: string;
+}
+/**
+ * Engine -> UI. Outcome of a loadNamModel or loadIr request, or of a hosted-plugin slot instance build (kind: "plugin" -- e.g. a plugin that can't do stereo-in/stereo-out is rejected here with a clear message). message is a human-readable success/failure description (e.g. the resolved model name, or an error). Always followed by a rigState with the up-to-date snapshot.
  */
 export interface LoadResult {
   type: "loadResult";
   kind: LoadResultKind;
   ok: boolean;
   message: string;
+}
+/**
+ * Engine -> UI. Progress of a running plugin scan (see requestPluginScan): done of total candidate files handled so far, and the name (file stem) of the candidate currently being scanned.
+ */
+export interface PluginScanProgress {
+  type: "pluginScanProgress";
+  done: number;
+  total: number;
+  currentName: string;
+}
+/**
+ * Engine -> UI. A plugin scan has finished. found is the total number of hostable plugins now known (the full cache, not just newly added); failed lists the names (file stems) of candidates that crashed or failed to scan this run -- those files are blacklisted and skipped on future scans. Always followed by a fresh rigState carrying the updated plugins list.
+ */
+export interface PluginScanDone {
+  type: "pluginScanDone";
+  found: number;
+  failed: string[];
 }
 /**
  * Engine -> UI. Full preset snapshot: the current preset (if any), whether the rig has changed since the last save/load, and the managed Presets library contents (flat, sorted by name). Sent on page load, after any loadPreset/savePresetAs/saveCurrentPreset/nextPreset/prevPreset resolves, in reply to requestPresets, and whenever `dirty` flips (throttled to ~4 emissions/second max so a fast knob drag doesn't flood the bridge).
