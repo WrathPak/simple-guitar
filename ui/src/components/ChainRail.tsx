@@ -12,7 +12,7 @@ interface RailSlot {
 }
 
 // M0 placeholder: static states, not wired to a real chain yet. Mirrors
-// design/mockups-v2.html Direction D "View 1" exactly (the reference render).
+// the Direction D reference render "View 1" exactly (the reference render).
 const SLOTS: RailSlot[] = [
   { key: "gate", title: "Gate", state: "on", Icon: GateIcon },
   { key: "comp", title: "Comp", state: "on", Icon: CompIcon },
@@ -24,7 +24,7 @@ const SLOTS: RailSlot[] = [
 ];
 
 /**
- * The chain rail: the entire signal-chain UI (DESIGN.md §3). Static
+ * The chain rail: the entire signal-chain UI. Static
  * placeholder for M0 — no drag-to-reorder or staging wired yet.
  */
 export function ChainRail() {

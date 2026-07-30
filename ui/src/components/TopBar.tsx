@@ -14,7 +14,7 @@ export interface TopBarProps {
   outputMeter: MeterReadout;
 }
 
-/** Top utility bar per DESIGN.md §1/§3: I/O knob+meter, chain rail + preset row, tuner. */
+/** Top utility bar: I/O knob+meter, chain rail + preset row, tuner. */
 export function TopBar({ inputMeter, outputMeter }: TopBarProps) {
   return (
     <div className="topbar">

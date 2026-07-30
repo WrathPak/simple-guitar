@@ -16,7 +16,7 @@ export function dbToFraction(db: number, min: number = METER_MIN_DB, max: number
   return (clamped - min) / (max - min);
 }
 
-/** 9px dB readout text beneath the meter (DESIGN.md §3). */
+/** 9px dB readout text beneath the meter. */
 export function formatDb(db: number): string {
   if (Number.isNaN(db) || db === Number.NEGATIVE_INFINITY || db <= METER_MIN_DB) return "-inf";
   const clamped = clampDb(db);

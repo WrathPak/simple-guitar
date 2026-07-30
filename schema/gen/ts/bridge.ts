@@ -6,7 +6,7 @@
  */
 
 /**
- * Simple Guitar C++ <-> React bridge protocol, v0. This schema is the single source of truth for the message layer described in PLAN.md §3.4: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
+ * Simple Guitar C++ <-> React bridge protocol, v0. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
  *
  * Union of every message that can cross the bridge in either direction, discriminated by the `type` field.
  */

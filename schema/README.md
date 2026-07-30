@@ -1,6 +1,6 @@
 # Bridge schema
 
-Single source of truth for the C++ (engine/app) <-> React (ui) message protocol described in `PLAN.md` §3.4.
+Single source of truth for the C++ (engine/app) <-> React (ui) message protocol.
 
 ## Contract-first rule
 

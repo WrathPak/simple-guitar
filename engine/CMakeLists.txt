@@ -1,5 +1,5 @@
 # sg_engine — realtime C++ DSP core.
-# Hard rule (see PLAN.md §3.2): this module never includes JUCE UI
+# Hard rule: this module never includes JUCE UI
 # or webview headers. juce_audio_basics and juce_dsp (pure DSP/data modules)
 # are the only permitted JUCE dependencies here.
 

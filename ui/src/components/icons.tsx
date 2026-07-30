@@ -1,6 +1,6 @@
 /**
  * Monoline chain-rail glyphs (1.4 stroke), copied verbatim from
- * design/mockups-v2.html Direction D (the visual reference of record) so the
+ * the Direction D reference render (the visual reference of record) so the
  * rail matches the locked mockup exactly. `currentColor` drives on/off/staged
  * styling from CSS — see ChainRail.css.
  */

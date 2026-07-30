@@ -1,7 +1,5 @@
 // Catch2 v3 tests for sg::Gain (engine/include/sg/Gain.h) and sg::MeterTap
-// (engine/include/sg/MeterTap.h), per the M0 bridge PoC ("one React knob
-// controls output gain of audio passthrough, meter data flows back" -
-// PLAN.md §4 M0).
+// (engine/include/sg/MeterTap.h).
 //
 // API contract exercised here (confirmed with the engine workstream):
 //   sg::Gain

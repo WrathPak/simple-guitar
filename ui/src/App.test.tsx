@@ -19,7 +19,7 @@ describe("App", () => {
     expect(screen.getByText("Powered by NAM")).toBeInTheDocument();
     expect(screen.getByText("Settings")).toBeInTheDocument();
 
-    // No value text at rest anywhere (DESIGN.md §4 rule #2).
+    // No value text at rest anywhere.
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

@@ -1,7 +1,7 @@
 import "./PresetRow.css";
 
 /**
- * `‹ Name ● › SAVE SAVE-AS` per DESIGN.md §3. Static placeholder for M0 —
+ * `‹ Name ● › SAVE SAVE-AS`. Static placeholder for M0 —
  * name-menu, unsaved tracking, and save actions are not wired yet.
  */
 export function PresetRow() {

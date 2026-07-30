@@ -1,6 +1,6 @@
 /**
  * Pure math for the physical Knob: normalized value (0..1) <-> pointer
- * rotation angle (-135deg..+135deg per DESIGN.md §3), plus the gesture math
+ * rotation angle (-135deg..+135deg), plus the gesture math
  * for drag/scroll/keyboard input. Kept dependency-free and side-effect-free
  * so it can be unit tested directly.
  */

@@ -5,7 +5,7 @@ export interface StageProps {
   children?: ReactNode;
 }
 
-/** Cinematic stage per DESIGN.md §1/§2: radial light + bottom vignette, one device centered. */
+/** Cinematic stage: radial light + bottom vignette, one device centered. */
 export function Stage({ children }: StageProps) {
   return (
     <div className="stage">

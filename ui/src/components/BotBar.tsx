@@ -1,7 +1,7 @@
 import "./BotBar.css";
 
 /**
- * Bottom utility bar per DESIGN.md §1: Tap/BPM/Metronome | credit |
+ * Bottom utility bar: Tap/BPM/Metronome | credit |
  * Presets/Library/Settings. Static placeholder for M0.
  */
 export function BotBar() {

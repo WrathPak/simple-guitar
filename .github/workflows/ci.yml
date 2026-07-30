@@ -131,7 +131,7 @@ jobs:
       # --- pluginval: plugin conformance check on the built VST3 -------------
       # continue-on-error: true for now (M0 is proving the skeleton builds and
       # passes basic conformance is a bonus, not a gate yet). Flip this to
-      # `false` at the M0 acceptance gate per PLAN.md §4 once the plugin is
+      # `false` at the M0 acceptance gate once the plugin is
       # expected to reliably pass strictness 8.
       - name: Download pluginval (Windows)
         if: runner.os == 'Windows'

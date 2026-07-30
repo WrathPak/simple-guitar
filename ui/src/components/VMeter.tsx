@@ -8,7 +8,7 @@ export interface VMeterProps {
   holdDb: number;
 }
 
-/** 4x40px meter per DESIGN.md §3: gradient fill, peak-hold tick, dB readout beneath. */
+/** 4x40px meter: gradient fill, peak-hold tick, dB readout beneath. */
 export function VMeter({ peakDb, holdDb }: VMeterProps) {
   const fillPct = dbToFraction(peakDb) * 100;
   const holdPct = dbToFraction(holdDb) * 100;

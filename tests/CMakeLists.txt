@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-# tests/CMakeLists.txt is self-contained by design (see PLAN.md §5, "risky
-# spikes early" / contract-first parallelism): it can be add_subdirectory'd
+# tests/CMakeLists.txt is self-contained: it can be add_subdirectory'd
 # by the top-level CMakeLists.txt before engine/ has landed, or before
 # sg_engine is wired in, without breaking `cmake --build`. Once the engine
 # workstream defines the sg_engine target, this file builds sg_tests and

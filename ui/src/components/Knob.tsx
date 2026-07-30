@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState, type CSSProperties, type Keyboa
 import "./Knob.css";
 import { clampNormalized, dragDeltaToValue, keyDeltaToValue, scrollDeltaToValue, valueToAngle } from "./knobMath";
 
-/** Physical cap sizes per DESIGN.md §3: 74 amp faceplate, 46 pedal, 34 chrome mini. */
+/** Physical cap sizes: 74 amp faceplate, 46 pedal, 34 chrome mini. */
 export type KnobSize = 74 | 46 | 34;
 
 export interface KnobProps {
