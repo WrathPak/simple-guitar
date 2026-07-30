@@ -1,0 +1,173 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+
+# Cancel superseded runs on the same ref to save matrix minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Check for ui/
+        id: ui
+        shell: bash
+        run: |
+          if [ -f ui/package.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: ui - npm ci
+        if: steps.ui.outputs.exists == 'true'
+        working-directory: ui
+        run: npm ci
+
+      - name: ui - npm test
+        if: steps.ui.outputs.exists == 'true'
+        working-directory: ui
+        run: npm test --if-present
+
+      - name: ui - npm run build
+        if: steps.ui.outputs.exists == 'true'
+        working-directory: ui
+        run: npm run build
+
+      # Caches CMake's FetchContent downloads (JUCE, Catch2, clap-juce-extensions,
+      # etc.) keyed on every CMakeLists.txt in the repo, so a schema/UI-only PR
+      # doesn't re-clone JUCE from scratch. Safe to key broadly: any CMakeLists.txt
+      # edit that could change fetched dep versions invalidates the whole cache.
+      - name: Cache CMake FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-cmake-deps-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-deps-
+
+      # app/ builds with NEEDS_WEBVIEW2 TRUE on Windows (WebView2 is not a
+      # system component there the way WKWebView is on macOS), so JUCE 8's
+      # CMake support needs an explicit -DJUCE_WEBVIEW2_PACKAGE_LOCATION
+      # pointing at an extracted copy of the Microsoft.Web.WebView2 NuGet
+      # package, or configure fails with "Could NOT find WebView2". macOS
+      # needs nothing extra here.
+      #
+      # JUCE's FindWebView2.cmake globs
+      # "${JUCE_WEBVIEW2_PACKAGE_LOCATION}/*Microsoft.Web.WebView2*" -- i.e.
+      # the variable must point at the *parent* of a directory named like
+      # "Microsoft.Web.WebView2.1.0.3485.44", matching the layout NuGet's own
+      # PackageManagement client would create. So the nupkg (a zip) is
+      # extracted one level down, into that exact subdirectory name, and
+      # JUCE_WEBVIEW2_PACKAGE_LOCATION points at its parent (.deps/webview2).
+      - name: Cache WebView2 NuGet package (Windows)
+        if: runner.os == 'Windows'
+        id: webview2-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.deps/webview2
+          key: webview2-1.0.3485.44
+
+      - name: Download WebView2 NuGet package (Windows)
+        if: runner.os == 'Windows' && steps.webview2-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p .deps/webview2/Microsoft.Web.WebView2.1.0.3485.44
+          curl -sSL -o webview2.nupkg.zip \
+            https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.3485.44
+          unzip -o webview2.nupkg.zip -d .deps/webview2/Microsoft.Web.WebView2.1.0.3485.44
+
+      - name: CMake configure
+        shell: bash
+        # -DCMAKE_BUILD_TYPE=Release matters for single-config generators
+        # (e.g. Unix Makefiles, the macOS-latest default); multi-config
+        # generators (e.g. the Windows-latest Visual Studio default) ignore
+        # it and use --config Release at build time instead.
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmake -B build -DCMAKE_BUILD_TYPE=Release \
+              -DJUCE_WEBVIEW2_PACKAGE_LOCATION="${{ github.workspace }}/.deps/webview2"
+          else
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
+          fi
+
+      - name: CMake build (Release)
+        run: cmake --build build --config Release
+
+      - name: ctest
+        shell: bash
+        # `ctest --test-dir build` only finds tests/ if some CMakeLists.txt
+        # in the tree above it called enable_testing()/include(CTest) --
+        # that's expected to live in the top-level CMakeLists.txt (owned by
+        # the engine/app workstream), which tests/CMakeLists.txt can't force
+        # from below. Fall back to pointing ctest straight at build/tests so
+        # this step works correctly either way.
+        run: |
+          if [ -f build/CTestTestfile.cmake ]; then
+            ctest --test-dir build -C Release --output-on-failure
+          else
+            ctest --test-dir build/tests -C Release --output-on-failure
+          fi
+
+      # --- pluginval: plugin conformance check on the built VST3 -------------
+      # continue-on-error: true for now (M0 is proving the skeleton builds and
+      # passes basic conformance is a bonus, not a gate yet). Flip this to
+      # `false` at the M0 acceptance gate per PLAN.md §4 once the plugin is
+      # expected to reliably pass strictness 8.
+      - name: Download pluginval (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -sSL -o pluginval.zip \
+            https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+          unzip -o pluginval.zip -d pluginval_bin
+          echo "PLUGINVAL=$(pwd)/pluginval_bin/pluginval.exe" >> "$GITHUB_ENV"
+
+      - name: Download pluginval (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          curl -sSL -o pluginval.zip \
+            https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -o pluginval.zip -d pluginval_bin
+          xattr -cr pluginval_bin/pluginval.app || true
+          echo "PLUGINVAL=$(pwd)/pluginval_bin/pluginval.app/Contents/MacOS/pluginval" >> "$GITHUB_ENV"
+
+      - name: Locate built VST3
+        id: vst3
+        shell: bash
+        run: |
+          match=$(find build -iname '*.vst3' -print -quit)
+          if [ -z "$match" ]; then
+            echo "No .vst3 build product found under build/ -- skipping pluginval." >&2
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "path=$match" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: pluginval --validate
+        if: steps.vst3.outputs.found == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          "$PLUGINVAL" --strictness-level 8 --validate "${{ steps.vst3.outputs.path }}"

@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simpleguitar.app/schema/bridge.schema.json",
+  "title": "BridgeMessage",
+  "description": "Simple Guitar C++ <-> React bridge protocol, v0. This schema is the single source of truth for the message layer described in PLAN.md §3.4: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.\n\nUnion of every message that can cross the bridge in either direction, discriminated by the `type` field.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/UiToEngineMessage"
+    },
+    {
+      "$ref": "#/$defs/EngineToUiMessage"
+    }
+  ],
+  "$defs": {
+    "SchemaVersion": {
+      "title": "SchemaVersion",
+      "description": "Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing.",
+      "type": "integer",
+      "minimum": 0,
+      "const": 0
+    },
+    "ParamId": {
+      "title": "ParamId",
+      "description": "Identifiers for host-automatable parameters exposed by the engine's APVTS. Currently only the M0 output gain passthrough param exists; new params are added here first.",
+      "type": "string",
+      "enum": [
+        "outputGain"
+      ]
+    },
+    "NormalizedParamValue": {
+      "title": "NormalizedParamValue",
+      "description": "A parameter value normalized to the JUCE APVTS convention of 0..1, regardless of the parameter's real-world range/units (e.g. outputGain's underlying range is -60..+12 dB). The engine owns the mapping in both directions.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "DecibelValue": {
+      "title": "DecibelValue",
+      "description": "A signal level expressed in dBFS, as reported by a meter tap. Not clamped in the schema since engines may report -inf for digital silence; consumers should treat very negative / non-finite values as silence.",
+      "type": "number"
+    },
+    "SetParam": {
+      "title": "SetParam",
+      "description": "UI -> engine. Set a parameter to a new normalized value, e.g. from a knob drag. The engine is the source of truth for the resulting real-world value and will echo it back via stateChanged.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "setParam"
+        },
+        "paramId": {
+          "$ref": "#/$defs/ParamId"
+        },
+        "value": {
+          "$ref": "#/$defs/NormalizedParamValue"
+        }
+      },
+      "required": [
+        "type",
+        "paramId",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "UiToEngineMessage": {
+      "title": "UiToEngineMessage",
+      "description": "Union of every message the React UI may send to the C++ engine.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SetParam"
+        }
+      ]
+    },
+    "MeterFrame": {
+      "title": "MeterFrame",
+      "description": "Engine -> UI. A single coalesced metering sample, pushed on a 30-60Hz timer off the audio thread (never per-block). M0 carries just the passthrough in/out peaks; more taps (per-block, tuner, etc.) are added as new fields in later milestones, not new message types.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "meterFrame"
+        },
+        "inPeakDb": {
+          "$ref": "#/$defs/DecibelValue"
+        },
+        "outPeakDb": {
+          "$ref": "#/$defs/DecibelValue"
+        }
+      },
+      "required": [
+        "type",
+        "inPeakDb",
+        "outPeakDb"
+      ],
+      "additionalProperties": false
+    },
+    "ParamValueMap": {
+      "title": "ParamValueMap",
+      "description": "Map of ParamId -> current normalized value, as sent in a full-state snapshot.",
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/ParamId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/NormalizedParamValue"
+      }
+    },
+    "StateChanged": {
+      "title": "StateChanged",
+      "description": "Engine -> UI. Full-chain parameter snapshot, sent on connect and whenever the engine-side state changes for a reason the UI didn't itself just cause (host automation, preset load, etc). Carries schemaVersion so the UI can detect a protocol mismatch against a stale bundle.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "stateChanged"
+        },
+        "schemaVersion": {
+          "$ref": "#/$defs/SchemaVersion"
+        },
+        "params": {
+          "$ref": "#/$defs/ParamValueMap"
+        }
+      },
+      "required": [
+        "type",
+        "schemaVersion",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "EngineToUiMessage": {
+      "title": "EngineToUiMessage",
+      "description": "Union of every message the C++ engine may send to the React UI.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/MeterFrame"
+        },
+        {
+          "$ref": "#/$defs/StateChanged"
+        }
+      ]
+    }
+  }
+}
