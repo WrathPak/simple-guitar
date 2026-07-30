@@ -48,8 +48,8 @@
   margin: 8px 4px 4px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: rgba(207, 83, 64, 0.12);
-  color: #e2a49a;
+  background: var(--state-error-bg);
+  color: var(--state-error-text);
   font-size: 12px;
   line-height: 1.4;
 }

@@ -89,6 +89,12 @@ button.amp-head--wide {
   cursor: pointer;
 }
 
+.amp-id-change:hover,
+.amp-id-change:focus-visible {
+  color: var(--plate-text-color);
+  outline: none;
+}
+
 .amp-deco-knobs {
   display: flex;
   gap: calc(var(--w) * 0.03);
@@ -123,6 +129,18 @@ button.amp-head--wide {
   gap: 26px;
 }
 
+/* Faceplate knobs read as bakelite (warm, dark-brown cap + cream pointer),
+   not the pedal/rack graphite knob -- same distinction the wide-shot's
+   decorative .amp-deco-knob already makes (see above). Scoped to .amp-knobs
+   so the shared Knob component stays visually generic everywhere else. */
+.amp-knobs .knob-cap {
+  background: radial-gradient(circle at 36% 28%, #4a463c 0%, #262319 62%, #14120c 100%);
+}
+
+.amp-knobs .knob-pointer {
+  background: #efe8d6;
+}
+
 .amp-normalize {
   display: flex;
   flex-direction: column;
@@ -130,6 +148,16 @@ button.amp-head--wide {
   gap: 7px;
   flex-shrink: 0;
   cursor: pointer;
+}
+
+.amp-normalize:hover .amp-normalize-label,
+.amp-normalize:focus-visible .amp-normalize-label {
+  color: var(--plate-text-color);
+}
+
+.amp-normalize:focus-visible {
+  outline: 2px solid var(--plate-label-color);
+  outline-offset: 3px;
 }
 
 .amp-normalize-led {

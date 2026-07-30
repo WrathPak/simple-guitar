@@ -56,6 +56,11 @@
   cursor: pointer;
 }
 
+.chrome-pill-name-btn:focus-visible {
+  outline: 2px solid var(--text-mid);
+  outline-offset: 3px;
+}
+
 .chrome-pill-name {
   font-size: var(--preset-size);
   font-weight: var(--preset-weight);
@@ -98,8 +103,10 @@
 }
 
 .chrome-menu-btn:hover,
+.chrome-menu-btn:focus-visible,
 .chrome-menu-btn[aria-expanded="true"] {
   color: var(--text-hi);
+  outline: none;
 }
 
 .chrome-menu-scrim {
@@ -133,10 +140,18 @@
   cursor: pointer;
 }
 
-.chrome-menu-item:hover,
-.chrome-menu-item:focus-visible {
+.chrome-menu-item:hover:not(:disabled),
+.chrome-menu-item:focus-visible:not(:disabled) {
   background: #222228;
   outline: none;
+}
+
+/* Library/Settings/Tuner: display-only placeholders (see Chrome.tsx) --
+   disabled rather than fake-clickable, same convention as the pill's
+   ‹ › nav when there's nothing to step to. */
+.chrome-menu-item:disabled {
+  color: var(--text-low);
+  cursor: default;
 }
 
 .chrome-hint-stack {

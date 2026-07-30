@@ -14,6 +14,16 @@
   cursor: pointer;
 }
 
+.gate-toggle:hover .gate-toggle-label,
+.gate-toggle:focus-visible .gate-toggle-label {
+  color: var(--text-hi);
+}
+
+.gate-toggle:focus-visible {
+  outline: 2px solid var(--text-mid);
+  outline-offset: 3px;
+}
+
 .gate-toggle-led {
   width: 9px;
   height: 9px;
@@ -21,9 +31,11 @@
   background: #2c2c31;
 }
 
+/* Gate is rack/utility processing (see DESIGN §2's family table), not
+   dynamics -- same green LED as the cab's power toggle, not a pedal color. */
 .gate-toggle[aria-pressed="true"] .gate-toggle-led {
-  background: radial-gradient(circle at 40% 35%, #f2f2f5, var(--family-dynamics-led) 60%, #9a9aa2 100%);
-  box-shadow: 0 0 8px rgba(242, 242, 245, 0.8);
+  background: radial-gradient(circle at 40% 35%, #d4ffe0, var(--family-utility-led) 60%, #1c5f36 100%);
+  box-shadow: 0 0 8px rgba(63, 174, 98, 0.8);
 }
 
 .gate-toggle-label {

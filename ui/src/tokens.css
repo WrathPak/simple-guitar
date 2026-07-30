@@ -32,6 +32,10 @@
   --text-low: #4c4c54;
 
   --state-unsaved: #b9974a;
+  /* Inline error copy (library/preset load failures, save-as validation) --
+     shares the meter's red hue rather than introducing a second red. */
+  --state-error-bg: rgba(207, 83, 64, 0.12);
+  --state-error-text: #e2a49a;
 
   /* Meters: vertical gradient */
   --meter-fill-0: #3fae62;

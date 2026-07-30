@@ -22,7 +22,10 @@ export interface PedalDeviceProps {
 
 /** Family-colored stompbox: decorative knobs in the wide shot, interactive when focused. */
 export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass, onJackRef, onSwap, knobs }: PedalDeviceProps) {
-  const knobSize = focused ? 57 : 32;
+  // Matches --pw's 300px * 19% from mockups-v3.html's focused pedal knob --
+  // only meaningful here since the wide shot renders `.pedal-deco-knob`
+  // (sized purely by CSS) instead of a live <Knob>, never this constant.
+  const FOCUSED_KNOB_SIZE = 57;
 
   const handleFootswitchClick = (e: MouseEvent) => {
     e.stopPropagation();
@@ -58,7 +61,7 @@ export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass,
             focused ? (
               <div key={k.label} className="pedal-knob-well">
                 <Knob
-                  size={knobSize}
+                  size={FOCUSED_KNOB_SIZE}
                   label={k.label}
                   value={knobs?.[i].value}
                   defaultValue={k.defaultValue}

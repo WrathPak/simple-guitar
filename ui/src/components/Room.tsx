@@ -86,7 +86,6 @@ const EMPTY_PRESETS_STATE: PresetsState = {
 
 const WIDE_HINT = "Click gear to focus · drag pedals to reorder · footswitch = bypass";
 const FOCUSED_HINT = "Click outside or press Esc to step back";
-const DELAY_CONTEXTUAL = "Tap · 122 BPM · Sync ¼";
 
 const MODEL_LIBRARY_EMPTY_COPY = "no models found — drop .nam files in Documents\\Simple Guitar\\Models";
 const IR_LIBRARY_EMPTY_COPY = "no irs found — drop .wav/.aiff files in Documents\\Simple Guitar\\IRs";
@@ -246,12 +245,21 @@ export function Room() {
 
   const focusedPedal = typeof focus === "number" ? pedals.find((p) => p.slot === focus) : undefined;
   const hint = focus === null ? WIDE_HINT : FOCUSED_HINT;
-  const contextual = focusedPedal?.def.family === "delay" ? DELAY_CONTEXTUAL : undefined;
+  // Chrome's contextual line (design §2) is reserved for a real time-based
+  // feature (tap tempo / sync) once one exists -- no pedal type has that
+  // yet, so nothing is ever passed here today.
 
   return (
     <div className="room">
       <div className="room-scene-wrap" onClick={focus !== null ? () => setFocus(null) : undefined}>
-        <div ref={sceneRef} className={`room-scene${focus !== null ? " room-scene--blurred" : ""}`}>
+        <div
+          ref={sceneRef}
+          className={`room-scene${focus !== null ? " room-scene--blurred" : ""}`}
+          // Blurred + dimmed already reads as "not here" visually; `inert`
+          // makes that true for keyboard/AT too, so Tab goes straight to the
+          // focused device instead of walking through dead background gear.
+          inert={focus !== null ? "" : undefined}
+        >
           <div className="room-floor" />
           <CableLayer
             containerRef={sceneRef}
@@ -374,7 +382,6 @@ export function Room() {
         inputMeter={inMeter}
         outputMeter={outMeter}
         hint={hint}
-        contextual={contextual}
         onSelectGate={() => setOverlayKind("gate")}
       />
     </div>

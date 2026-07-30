@@ -27,22 +27,22 @@ describe("Room camera", () => {
     expect(screen.getByText(/Click gear to focus/)).toBeInTheDocument();
   });
 
-  it("dollies in on a pedal click, shows delay's contextual tap/bpm, and steps back on backdrop click", () => {
+  it("dollies in on a pedal click and steps back on backdrop click", () => {
     render(<Room />);
 
     fireEvent.click(screen.getByRole("button", { name: "Focus echoes" }));
-    expect(screen.getByText("Tap · 122 BPM · Sync ¼")).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Time" })).toBeInTheDocument();
 
     const backdrop = document.querySelector(".room-scene-wrap");
     expect(backdrop).not.toBeNull();
     fireEvent.click(backdrop!);
-    expect(screen.queryByText("Tap · 122 BPM · Sync ¼")).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Time" })).not.toBeInTheDocument();
   });
 
-  it("shows no contextual line for a non-delay pedal", () => {
+  it("shows no contextual line for any pedal -- no time-based feature is wired up yet", () => {
     render(<Room />);
-    fireEvent.click(screen.getByRole("button", { name: "Focus screamer" }));
-    expect(screen.queryByText(/BPM/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Focus echoes" }));
+    expect(document.querySelector(".chrome-contextual")).not.toBeInTheDocument();
   });
 });
 

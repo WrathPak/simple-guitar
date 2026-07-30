@@ -97,6 +97,12 @@ button.cab--wide {
   cursor: pointer;
 }
 
+.cab-id-change:hover,
+.cab-id-change:focus-visible {
+  color: var(--text-hi);
+  outline: none;
+}
+
 .cab-knobs {
   display: flex;
   gap: 22px;
@@ -109,6 +115,16 @@ button.cab--wide {
   gap: 7px;
   flex-shrink: 0;
   cursor: pointer;
+}
+
+.cab-power:hover .cab-power-label,
+.cab-power:focus-visible .cab-power-label {
+  color: var(--text-hi);
+}
+
+.cab-power:focus-visible {
+  outline: 2px solid var(--text-mid);
+  outline-offset: 3px;
 }
 
 .cab-power-led {

@@ -111,7 +111,7 @@ export function Chrome({
                 Save as
               </button>
               {STATIC_MENU_ITEMS.map((item) => (
-                <button key={item} type="button" role="menuitem" className="chrome-menu-item">
+                <button key={item} type="button" role="menuitem" className="chrome-menu-item" disabled>
                   {item}
                 </button>
               ))}
