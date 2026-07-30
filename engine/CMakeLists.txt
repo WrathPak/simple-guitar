@@ -96,6 +96,18 @@ if (MSVC)
     # (transitively, through sg_engine), even though sg_engine only needs to
     # link sg_nam_core PRIVATEly.
     target_link_options(sg_nam_core INTERFACE "/WHOLEARCHIVE:$<TARGET_FILE_NAME:sg_nam_core>")
+elseif(APPLE)
+    # Same static-initializer problem, Apple linker spelling: without
+    # -force_load, ld strips the unreferenced NAM objects and their
+    # architecture self-registrations, and get_dsp() throws "No config
+    # parser registered for architecture: ..." at runtime (caught by CI on
+    # macos-latest; Windows was already covered by /WHOLEARCHIVE above).
+    target_link_options(sg_nam_core INTERFACE
+        "SHELL:-Wl,-force_load,$<TARGET_FILE:sg_nam_core>")
+else()
+    # ELF linkers: same idea via --whole-archive.
+    target_link_options(sg_nam_core INTERFACE
+        "SHELL:-Wl,--whole-archive,$<TARGET_FILE:sg_nam_core>,--no-whole-archive")
 endif()
 
 # --- sg_engine -----------------------------------------------------------
