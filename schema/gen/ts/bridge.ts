@@ -104,9 +104,9 @@ export type EngineToUiMessage =
  */
 export type DecibelValue = number;
 /**
- * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing. M3 bumps 4 -> 5: hosted third-party VST3 plugins (pedal type 7; requestPluginScan/setSlotPlugin/openPluginEditor messages; pluginScanProgress/pluginScanDone events; rigState.plugins + per-slot pluginName/pluginMissing). The engine always sends 5; 4 remains in the enum only until the UI wave updates its own literals -- once it has, collapse this back to a single-value const 5.
+ * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing. M3 bumps 4 -> 5: hosted third-party VST3 plugins (pedal type 7; requestPluginScan/setSlotPlugin/openPluginEditor messages; pluginScanProgress/pluginScanDone events; rigState.plugins + per-slot pluginName/pluginMissing). Engine and UI are both on 5, so this is a single-value const again.
  */
-export type SchemaVersion = 4 | 5;
+export type SchemaVersion = 5;
 /**
  * Which loader a loadResult reports on. "plugin" reports the async build of a hosted-plugin slot instance (setSlotPlugin, or a state/preset restore reviving one).
  */
@@ -238,7 +238,7 @@ export interface ParamValueMap {
   [k: string]: NormalizedParamValue;
 }
 /**
- * Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any), the 6 pedal slots' type + on/off (+ hosted-plugin info for type-7 slots), the managed library contents, and the scanned plugins list (sorted by name). Sent on page load, after any loadNamModel/loadIr/setSlotType/movePedal/setSlotPlugin completes, after pluginScanDone, and in reply to requestRigState. plugins is always sent by the current engine; it is optional in the schema only so the previous UI wave's v4 literals keep typechecking until the UI wave lands -- mark it required once it has.
+ * Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any), the 6 pedal slots' type + on/off (+ hosted-plugin info for type-7 slots), the managed library contents, and the scanned plugins list (sorted by name, empty until a scan has run). Sent on page load, after any loadNamModel/loadIr/setSlotType/movePedal/setSlotPlugin completes, after pluginScanDone, and in reply to requestRigState.
  */
 export interface RigState {
   type: "rigState";
@@ -252,7 +252,7 @@ export interface RigState {
    */
   slots: [SlotState, SlotState, SlotState, SlotState, SlotState, SlotState];
   library: RigLibrary;
-  plugins?: PluginEntry[];
+  plugins: PluginEntry[];
 }
 /**
  * One pedal slot's current occupant + on/off, as reported on rigState.slots. The slot's four knob values (P1-4) are ordinary ParamIds (slot{N}P1..P4), not repeated here. For a type-7 (hosted plugin) slot the engine also sends pluginName (the hosted plugin's display name, or null if no plugin has been picked yet) and pluginMissing (true if the slot references a plugin id that is no longer installed/scanned -- the slot keeps its id + saved state and processes as a bypass until the plugin returns); both are omitted for every other type.

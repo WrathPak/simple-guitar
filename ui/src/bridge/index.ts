@@ -5,13 +5,19 @@ export { useParam } from "./useParam";
 export {
   subscribeRigState,
   subscribeLoadResult,
+  subscribePluginScanProgress,
+  subscribePluginScanDone,
   sendLoadNamModel,
   sendLoadIr,
   sendRequestRigState,
   sendSetSlotType,
   sendMovePedal,
+  sendRequestPluginScan,
+  sendSetSlotPlugin,
+  sendOpenPluginEditor,
   isValidSlotIndex,
   isValidPedalType,
+  PLUGIN_PEDAL_TYPE,
 } from "./rig";
 export {
   subscribePresetsState,
@@ -33,6 +39,9 @@ export type {
   LoadResult,
   LoadResultKind,
   SlotState,
+  PluginEntry,
+  PluginScanProgress,
+  PluginScanDone,
   PresetsState,
   PresetResult,
 } from "../../../schema/gen/ts/bridge";

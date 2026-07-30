@@ -29,6 +29,8 @@ export interface ChromeProps {
   contextual?: string;
   /** Opens the gate overlay -- gate is rack processing behind this menu, not a pedal on the floor. */
   onSelectGate?: () => void;
+  /** Opens the plugins overlay (what's installed + the scan action). */
+  onSelectPlugins?: () => void;
 }
 
 // Library/Settings/Tuner are display-only placeholders for now (no menu action wired yet).
@@ -49,6 +51,7 @@ export function Chrome({
   hint,
   contextual,
   onSelectGate,
+  onSelectPlugins,
 }: ChromeProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -125,6 +128,17 @@ export function Chrome({
                 }}
               >
                 Gate
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="chrome-menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onSelectPlugins?.();
+                }}
+              >
+                Plugins
               </button>
             </div>
           </>

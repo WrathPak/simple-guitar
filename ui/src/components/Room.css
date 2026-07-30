@@ -71,7 +71,13 @@
   gap: 18px;
 }
 
-.room-focus-remove {
+.room-focus-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.room-focus-action {
   font-size: var(--label-size, 9.5px);
   letter-spacing: var(--label-tracking, 0.18em);
   text-transform: uppercase;
@@ -83,8 +89,8 @@
   transition: color var(--camera-duration) var(--camera-ease);
 }
 
-.room-focus-remove:hover,
-.room-focus-remove:focus-visible {
+.room-focus-action:hover,
+.room-focus-action:focus-visible {
   color: var(--text-mid);
   outline: none;
 }

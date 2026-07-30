@@ -84,7 +84,7 @@ const devPresetResultListeners = new Set<(result: PresetResult) => void>();
 function buildDevPresetsState(): PresetsState {
   return {
     type: "presetsState",
-    schemaVersion: 4,
+    schemaVersion: 5,
     current: devCurrent,
     dirty: devDirty,
     presets: devPresets,

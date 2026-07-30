@@ -2,7 +2,7 @@ import type { CSSProperties, KeyboardEvent, MouseEvent } from "react";
 import type { ParamHandle } from "../bridge";
 import "./PedalDevice.css";
 import { Knob } from "./Knob";
-import type { PedalTypeDef } from "./pedalDefs";
+import type { PedalKnobDef, PedalTypeDef } from "./pedalDefs";
 
 export interface PedalDeviceProps {
   pedal: PedalTypeDef;
@@ -14,14 +14,18 @@ export interface PedalDeviceProps {
   onJackRef?: (which: "in" | "out", el: HTMLElement | null) => void;
   /** Shift+ArrowLeft/Right: swap this pedal with its neighbor in `direction`. */
   onSwap?: (direction: -1 | 1) => void;
-  /** Live param handles, same order/length as pedal.knobs (3 or 4 per type).
+  /** Live param handles, same order/length as pedal.knobs (1, 3 or 4 per type).
       Only used when focused -- the wide shot's knobs stay purely decorative
       (angle-only), same convention as AmpDevice/CabDevice. */
   knobs?: ParamHandle[];
+  /** Hosted-plugin slots only: the plugin this slot references isn't installed
+      any more. The pedal keeps its place on the floor (it can still be moved
+      or removed) but has nothing to control. */
+  missing?: boolean;
 }
 
 /** Family-colored stompbox: decorative knobs in the wide shot, interactive when focused. */
-export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass, onJackRef, onSwap, knobs }: PedalDeviceProps) {
+export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass, onJackRef, onSwap, knobs, missing = false }: PedalDeviceProps) {
   // Matches --pw's 300px * 19% from mockups-v3.html's focused pedal knob --
   // only meaningful here since the wide shot renders `.pedal-deco-knob`
   // (sized purely by CSS) instead of a live <Knob>, never this constant.
@@ -31,6 +35,25 @@ export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass,
     e.stopPropagation();
     onToggleBypass();
   };
+
+  const renderKnob = (k: PedalKnobDef, i: number) =>
+    focused ? (
+      <div key={k.label} className="pedal-knob-well">
+        <Knob
+          size={FOCUSED_KNOB_SIZE}
+          label={k.label}
+          value={knobs?.[i].value}
+          defaultValue={k.defaultValue}
+          format={k.format}
+          onChange={knobs?.[i].setValue}
+        />
+      </div>
+    ) : (
+      <div key={k.label} className="pedal-knob-well">
+        <div className="pedal-deco-knob" style={{ "--r": `${k.angle}deg` } as CSSProperties} />
+        <div className="pedal-deco-label">{k.label}</div>
+      </div>
+    );
 
   // Jacks live OUTSIDE `.pedal` (as siblings in `.pedal-shell`, painted AFTER
   // it so they sit on top) so they can protrude above the shell's top edge
@@ -52,30 +75,13 @@ export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass,
           `pedal--${pedal.family}`,
           focused ? "pedal--focused" : "pedal--wide",
           bypassed ? "pedal--bypassed" : "",
+          missing ? "pedal--missing" : "",
         ]
           .filter(Boolean)
           .join(" ")}
       >
         <div className="pedal-panel">
-          {pedal.knobs.map((k, i) =>
-            focused ? (
-              <div key={k.label} className="pedal-knob-well">
-                <Knob
-                  size={FOCUSED_KNOB_SIZE}
-                  label={k.label}
-                  value={knobs?.[i].value}
-                  defaultValue={k.defaultValue}
-                  format={k.format}
-                  onChange={knobs?.[i].setValue}
-                />
-              </div>
-            ) : (
-              <div key={k.label} className="pedal-knob-well">
-                <div className="pedal-deco-knob" style={{ "--r": `${k.angle}deg` } as CSSProperties} />
-                <div className="pedal-deco-label">{k.label}</div>
-              </div>
-            ),
-          )}
+          {missing ? <div className="pedal-missing">missing</div> : pedal.knobs.map(renderKnob)}
         </div>
         <div className="pedal-name">{pedal.name}</div>
         <div className="pedal-foot">
@@ -85,6 +91,7 @@ export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass,
             className="pedal-footswitch"
             aria-label={`${pedal.name} bypass`}
             aria-pressed={!bypassed}
+            disabled={missing}
             onClick={handleFootswitchClick}
           />
         </div>

@@ -20,12 +20,13 @@ function triggerRigState(fake: ReturnType<typeof createFakeJuceBackend>, overrid
   act(() => {
     fake.trigger("rigState", {
       type: "rigState",
-      schemaVersion: 4,
+      schemaVersion: 5,
       namModelName: null,
       namModelSampleRate: 0,
       irName: null,
       slots: slotsOf(1, 2, 3),
       library: { models: [], irs: [] },
+      plugins: [],
       ...overrides,
     });
   });

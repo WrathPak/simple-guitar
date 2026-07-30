@@ -1,16 +1,21 @@
 /**
- * Pedal type registry for the 6-slot floor (schema v4). Each of the six
- * pedal types (screamer/echoes/chamber/squeeze/wobble/shiver) is described
- * once: display name, family (drives the shell/LED color CSS class, see
- * PedalDevice.css + tokens.css), and knob layout. A knob binds to one of the
- * slot's four generic P params (slot{N}P1..P4) via `param`; which slot's
- * params it actually reads is decided by whoever renders it (Room owns the
- * useParam calls and passes live handles down).
+ * Pedal type registry for the 6-slot floor (schema v5). Each of the six
+ * built-in pedal types (screamer/echoes/chamber/squeeze/wobble/shiver) is
+ * described once: display name, family (drives the shell/LED color CSS
+ * class, see PedalDevice.css + tokens.css), and knob layout. A knob binds to
+ * one of the slot's four generic P params (slot{N}P1..P4) via `param`; which
+ * slot's params it actually reads is decided by whoever renders it (Room
+ * owns the useParam calls and passes live handles down).
+ *
+ * A seventh type -- a hosted third-party plugin -- has no fixed entry here:
+ * its name comes from the engine per slot, so `pluginPedalDef` builds a def
+ * on demand instead (same shape, so every consumer stays type-agnostic).
  *
  * `angle` is only used for the wide-shot's decorative knob rendering
  * (PedalDevice never live-binds knobs there, same convention as
  * AmpDevice/CabDevice).
  */
+import { PLUGIN_PEDAL_TYPE } from "../bridge";
 import type { ParamId } from "../../../schema/gen/ts/bridge";
 import { ECHOES_TIME_RANGE, format01AsTen, formatLogMs } from "./paramMath";
 
@@ -21,7 +26,7 @@ export const SLOT_COUNT = 6;
 export const EMPTY_SLOT_TYPE = 0;
 
 /** Shell/LED family, mapped to CSS via `pedal--${family}` (family gradients/LEDs live in tokens.css + PedalDevice.css). */
-export type PedalFamily = "drive" | "dynamics" | "mod" | "delay" | "verb";
+export type PedalFamily = "drive" | "dynamics" | "mod" | "delay" | "verb" | "utility";
 
 export interface PedalKnobDef {
   label: string;
@@ -116,7 +121,32 @@ export const PEDAL_TYPES: PedalTypeDef[] = [
   },
 ];
 
-/** Registry lookup by slot{N}Type value. Returns undefined for 0 (empty) or anything out of range. */
+/**
+ * The one knob a hosted plugin gets: the engine-side wet/dry mix on P1.
+ * Everything else the plugin exposes lives in its own editor.
+ */
+const PLUGIN_MIX_KNOB: PedalKnobDef = { label: "Mix", angle: 0, param: 1, defaultValue: 0.5, format: format01AsTen };
+
+/** Stand-in name for a type-7 slot with no plugin picked yet -- the blink between setSlotType and setSlotPlugin resolving. */
+const UNNAMED_PLUGIN = "plugin";
+
+/**
+ * Builds the def for a hosted-plugin slot. The plugin's own name is the
+ * pedal's name (the engine sends it on rigState.slots[n].pluginName), the
+ * shell is the matte-black utility family, and the panel carries the single
+ * mix knob.
+ */
+export function pluginPedalDef(pluginName: string | null | undefined): PedalTypeDef {
+  return {
+    type: PLUGIN_PEDAL_TYPE,
+    id: "plugin",
+    name: pluginName ?? UNNAMED_PLUGIN,
+    family: "utility",
+    knobs: [PLUGIN_MIX_KNOB],
+  };
+}
+
+/** Registry lookup by slot{N}Type value. Returns undefined for 0 (empty), 7 (use pluginPedalDef) or anything out of range. */
 export function pedalTypeDef(type: number): PedalTypeDef | undefined {
   return PEDAL_TYPES.find((def) => def.type === type);
 }

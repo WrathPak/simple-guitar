@@ -11,6 +11,8 @@ export interface FloorPedal {
   slot: number;
   def: PedalTypeDef;
   bypassed: boolean;
+  /** Hosted-plugin slots only: the referenced plugin is no longer installed. */
+  missing?: boolean;
 }
 
 export interface PedalRowProps {
@@ -114,6 +116,7 @@ export function PedalRow({ pedals, onFocusPedal, onToggleBypass, onMovePedal, on
             <PedalDevice
               pedal={pedal.def}
               bypassed={pedal.bypassed}
+              missing={pedal.missing}
               focused={false}
               onFocus={() => onFocusPedal(pedal.slot)}
               onToggleBypass={() => onToggleBypass(pedal.slot)}

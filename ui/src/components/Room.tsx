@@ -1,18 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  PLUGIN_PEDAL_TYPE,
   sendLoadIr,
   sendLoadNamModel,
   sendLoadPreset,
   sendMovePedal,
   sendNextPreset,
+  sendOpenPluginEditor,
   sendPrevPreset,
+  sendRequestPluginScan,
   sendRequestPresets,
   sendRequestRigState,
   sendSaveCurrentPreset,
   sendSavePresetAs,
+  sendSetSlotPlugin,
   sendSetSlotType,
   subscribeLoadResult,
   subscribeMeterFrame,
+  subscribePluginScanDone,
+  subscribePluginScanProgress,
   subscribePresetResult,
   subscribePresetsState,
   subscribeRigState,
@@ -41,10 +47,11 @@ import {
   defaultNormalizedForLogHz,
   isParamOn,
 } from "./paramMath";
-import { EMPTY_SLOT_TYPE, pedalTypeDef, slotDomId, slotParamId } from "./pedalDefs";
+import { EMPTY_SLOT_TYPE, pedalTypeDef, pluginPedalDef, slotDomId, slotParamId } from "./pedalDefs";
 import { PedalDevice } from "./PedalDevice";
 import { PedalPaletteOverlay } from "./PedalPaletteOverlay";
 import { PedalRow, type FloorPedal } from "./PedalRow";
+import { PluginScanOverlay, type PluginScanState } from "./PluginScanOverlay";
 import { PresetsOverlay } from "./PresetsOverlay";
 import "./Room.css";
 import { SaveAsOverlay } from "./SaveAsOverlay";
@@ -68,17 +75,18 @@ const DEFAULT_SLOTS: RigState["slots"] = [
 
 const EMPTY_RIG_STATE: RigState = {
   type: "rigState",
-  schemaVersion: 4,
+  schemaVersion: 5,
   namModelName: null,
   namModelSampleRate: 0,
   irName: null,
   slots: DEFAULT_SLOTS,
   library: { models: [], irs: [] },
+  plugins: [],
 };
 
 const EMPTY_PRESETS_STATE: PresetsState = {
   type: "presetsState",
-  schemaVersion: 4,
+  schemaVersion: 5,
   current: null,
   dirty: false,
   presets: [],
@@ -94,7 +102,7 @@ const IR_LIBRARY_EMPTY_COPY = "no irs found — drop .wav/.aiff files in Documen
 type FocusTarget = "amp" | "cab" | number | null;
 
 /** Which full-window overlay (if any) is open. Independent of camera focus. */
-type OverlayKind = "model" | "ir" | "gate" | "presets" | "saveAs" | "palette" | null;
+type OverlayKind = "model" | "ir" | "gate" | "presets" | "saveAs" | "palette" | "plugins" | null;
 
 /** One slot's live param handles: footswitch (On) + the four generic knobs (P1..P4). */
 interface SlotParams {
@@ -152,6 +160,7 @@ export function Room() {
   const [presetsState, setPresetsState] = useState<PresetsState>(EMPTY_PRESETS_STATE);
   const [presetResult, setPresetResult] = useState<PresetResult | null>(null);
   const [overlayKind, setOverlayKind] = useState<OverlayKind>(null);
+  const [pluginScan, setPluginScan] = useState<PluginScanState>({ running: false, progress: null, done: null });
 
   const [inMeter, setInMeter] = useState({ peakDb: METER_MIN_DB, holdDb: METER_MIN_DB });
   const [outMeter, setOutMeter] = useState({ peakDb: METER_MIN_DB, holdDb: METER_MIN_DB });
@@ -165,10 +174,17 @@ export function Room() {
   // (= signal) order.
   const slots: readonly SlotState[] = rigState.slots;
   const pedals: FloorPedal[] = slots
-    .map((slot, index) => {
-      const def = pedalTypeDef(slot.type);
+    .map((slot, index): FloorPedal | null => {
+      // A hosted plugin has no fixed registry entry -- its name (and whether
+      // the plugin is still installed) comes from the slot itself.
+      const def = slot.type === PLUGIN_PEDAL_TYPE ? pluginPedalDef(slot.pluginName) : pedalTypeDef(slot.type);
       if (!def) return null;
-      return { slot: index, def, bypassed: !isParamOn(slotParams[index].on.value) };
+      return {
+        slot: index,
+        def,
+        bypassed: !isParamOn(slotParams[index].on.value),
+        missing: slot.pluginMissing === true,
+      };
     })
     .filter((pedal): pedal is FloorPedal => pedal !== null);
 
@@ -186,6 +202,8 @@ export function Room() {
 
   useEffect(() => subscribeRigState(setRigState), []);
   useEffect(() => subscribeLoadResult(setLoadResult), []);
+  useEffect(() => subscribePluginScanProgress((progress) => setPluginScan({ running: true, progress, done: null })), []);
+  useEffect(() => subscribePluginScanDone((done) => setPluginScan({ running: false, progress: null, done })), []);
   useEffect(() => subscribePresetsState(setPresetsState), []);
   useEffect(() => subscribePresetResult(setPresetResult), []);
 
@@ -231,6 +249,23 @@ export function Room() {
   const addPedal = (pedalType: number) => {
     if (firstEmptySlot !== -1) sendSetSlotType(firstEmptySlot, pedalType);
     setOverlayKind(null);
+  };
+
+  /**
+   * Palette pick of a hosted plugin: claim the first empty slot as a type-7
+   * pedal, then name the plugin that goes in it. The palette stays open
+   * until the engine reports the instance built (or failed).
+   */
+  const addPluginPedal = (pluginId: string) => {
+    if (firstEmptySlot === -1) return;
+    sendSetSlotType(firstEmptySlot, PLUGIN_PEDAL_TYPE);
+    sendSetSlotPlugin(firstEmptySlot, pluginId);
+  };
+
+  /** Scanning is never automatic -- it runs third-party code and can take a while, so it only ever starts from a click. */
+  const startPluginScan = () => {
+    setPluginScan({ running: true, progress: null, done: null });
+    sendRequestPluginScan();
   };
 
   /** The focused pedal's quiet remove action: empty its slot, step the camera back out; the row reflows and cables re-route on the echoed rigState. */
@@ -314,13 +349,24 @@ export function Room() {
             <PedalDevice
               pedal={focusedPedal.def}
               bypassed={focusedPedal.bypassed}
+              missing={focusedPedal.missing}
               focused
               onToggleBypass={() => toggleBypass(focusedPedal.slot)}
               knobs={focusedPedal.def.knobs.map((k) => slotParams[focusedPedal.slot].knobs[k.param - 1])}
             />
-            <button type="button" className="room-focus-remove" onClick={() => removePedal(focusedPedal.slot)}>
-              remove
-            </button>
+            <div className="room-focus-actions">
+              {/* A hosted plugin's own controls live in its native editor --
+                  the one sanctioned window outside this one. Nothing to open
+                  while the plugin is missing. */}
+              {focusedPedal.def.type === PLUGIN_PEDAL_TYPE && !focusedPedal.missing && (
+                <button type="button" className="room-focus-action" onClick={() => sendOpenPluginEditor(focusedPedal.slot)}>
+                  open editor
+                </button>
+              )}
+              <button type="button" className="room-focus-action" onClick={() => removePedal(focusedPedal.slot)}>
+                remove
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -350,7 +396,25 @@ export function Room() {
         />
       )}
       {overlayKind === "gate" && <GateOverlay gateOn={gateOn} gateThreshold={gateThresholdDb} onClose={closeOverlay} />}
-      {overlayKind === "palette" && <PedalPaletteOverlay onPick={addPedal} onClose={closeOverlay} />}
+      {overlayKind === "palette" && (
+        <PedalPaletteOverlay
+          onPick={addPedal}
+          plugins={rigState.plugins}
+          onPickPlugin={addPluginPedal}
+          onScan={startPluginScan}
+          scanning={pluginScan.running}
+          loadResult={loadResult}
+          onClose={closeOverlay}
+        />
+      )}
+      {overlayKind === "plugins" && (
+        <PluginScanOverlay
+          scan={pluginScan}
+          pluginCount={rigState.plugins.length}
+          onScan={startPluginScan}
+          onClose={closeOverlay}
+        />
+      )}
       {overlayKind === "presets" && (
         <PresetsOverlay
           presets={presetsState.presets}
@@ -383,6 +447,7 @@ export function Room() {
         outputMeter={outMeter}
         hint={hint}
         onSelectGate={() => setOverlayKind("gate")}
+        onSelectPlugins={() => setOverlayKind("plugins")}
       />
     </div>
   );

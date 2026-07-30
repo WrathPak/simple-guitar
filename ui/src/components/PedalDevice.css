@@ -240,6 +240,50 @@
   box-shadow: 0 0 8px rgba(80, 190, 225, 0.9);
 }
 
+/* Utility & hosted plugins — matte black shell, green LED. */
+.pedal--utility {
+  background: linear-gradient(180deg, var(--family-utility-grad-a), var(--family-utility-grad-b));
+}
+.pedal--utility .pedal-name {
+  color: #d6dcd7;
+}
+.pedal--utility .pedal-led {
+  background: radial-gradient(circle at 40% 35%, #d3ffe0, var(--family-utility-led) 60%, #14582f);
+  box-shadow: 0 0 8px rgba(63, 174, 98, 0.9);
+}
+
+/* A hosted plugin whose file is gone: the pedal is still on the floor (still
+   draggable, still removable) but there is nothing to turn, so the panel says
+   so instead of carrying a knob that controls nothing. */
+.pedal-missing {
+  flex: 1;
+  text-align: center;
+  padding: 6px 0;
+  font-size: var(--min-text-size);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-low);
+}
+
+.pedal--focused .pedal-missing {
+  font-size: var(--label-size, 9.5px);
+  padding: 12px 0;
+}
+
+.pedal--missing {
+  filter: saturate(0.2) brightness(0.6);
+}
+
+.pedal--missing .pedal-led {
+  background: #2c2c31;
+  box-shadow: none;
+}
+
+.pedal--missing .pedal-footswitch {
+  cursor: default;
+  opacity: 0.5;
+}
+
 /* Bypass: shell desaturated + dimmed, LED dark. No other on/off UI. */
 .pedal--bypassed {
   filter: saturate(0.35) brightness(0.72);

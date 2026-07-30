@@ -59,3 +59,101 @@
   text-transform: lowercase;
   color: var(--text-mid);
 }
+
+/* Hosted plugins: quiet name-only rows under the built-in tiles, separated by
+   a hairline rather than a second panel. */
+.pedal-palette-plugins {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--chrome-hairline);
+}
+
+.pedal-palette-section {
+  padding: 0 4px 8px;
+  font-size: var(--label-size, 9.5px);
+  letter-spacing: var(--label-tracking, 0.18em);
+  text-transform: lowercase;
+  color: var(--text-low);
+}
+
+.pedal-palette-plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pedal-palette-plugin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text-hi);
+  cursor: pointer;
+}
+
+.pedal-palette-plugin-row:hover,
+.pedal-palette-plugin-row:focus-visible {
+  background: #1e1e22;
+  outline: none;
+}
+
+.pedal-palette-plugin-row:disabled {
+  cursor: default;
+  color: var(--text-mid);
+}
+
+.pedal-palette-plugin-status {
+  flex: none;
+  font-size: var(--min-text-size);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-mid);
+}
+
+.pedal-palette-plugins-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 12px 6px;
+  font-size: 12px;
+  color: var(--text-mid);
+}
+
+.pedal-palette-scan {
+  flex: none;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: var(--label-size, 9.5px);
+  letter-spacing: var(--label-tracking, 0.18em);
+  text-transform: lowercase;
+  color: var(--text-mid);
+  background: none;
+  cursor: pointer;
+  transition: color var(--camera-duration) var(--camera-ease);
+}
+
+.pedal-palette-scan:hover,
+.pedal-palette-scan:focus-visible {
+  color: var(--text-hi);
+  outline: none;
+}
+
+.pedal-palette-scan:disabled {
+  cursor: default;
+  color: var(--text-low);
+}
+
+.pedal-palette-error {
+  margin: 10px 4px 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--state-error-bg);
+  color: var(--state-error-text);
+  font-size: 12px;
+  line-height: 1.4;
+}
