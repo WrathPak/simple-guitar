@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getSliderState, subscribeMeterFrame, type MeterFrame } from "../bridge";
 import { AmpDevice } from "./AmpDevice";
 import { Backline } from "./Backline";
+import { CableLayer, type JackPair } from "./CableLayer";
 import { Chrome } from "./Chrome";
 import { METER_MIN_DB, nextPeakHold } from "./meterMath";
 import { DEMO_PEDALS } from "./pedalDefs";
@@ -32,6 +33,14 @@ export function Room() {
   );
   const [focus, setFocus] = useState<FocusTarget>(null);
 
+  // Cable geometry: read live off the DOM, never hardcoded. `jacksRef` and
+  // `ampAnchorRef` are populated by the pedal row / backline as they mount;
+  // `sceneRef` is the coordinate space cable points are measured relative to.
+  const sceneRef = useRef<HTMLDivElement>(null);
+  const jacksRef = useRef(new Map<string, JackPair>());
+  const ampAnchorRef = useRef<HTMLElement | null>(null);
+  const [cablesActive, setCablesActive] = useState(false);
+
   useEffect(() => outputSlider.current.subscribe(setOutputValue), []);
 
   useEffect(() => {
@@ -54,6 +63,22 @@ export function Room() {
     setPedals((prev) => prev.map((p) => (p.id === id ? { ...p, bypassed: !p.bypassed } : p)));
   };
 
+  /**
+   * Commits a new left-to-right chain order (drag drop or keyboard swap).
+   * The order lives here as a plain list of ids — the one place it's
+   * authoritative — so the pedal row and the cable layer both just derive
+   * their layout from it. Audio is a fixed passthrough for now; once the
+   * real chain lands this is the one spot that would also send an
+   * order-changed message across the bridge.
+   */
+  const reorderPedals = (order: string[]) => {
+    setPedals((prev) => {
+      const byId = new Map(prev.map((p) => [p.id, p]));
+      const next = order.map((id) => byId.get(id)).filter((p): p is PedalRowState => p !== undefined);
+      return next.length === prev.length ? next : prev;
+    });
+  };
+
   const focusedPedal = typeof focus === "string" && focus !== "amp" ? pedals.find((p) => p.id === focus) : undefined;
   const hint = focus === null ? WIDE_HINT : FOCUSED_HINT;
   const contextual = focusedPedal?.family === "delay" ? DELAY_CONTEXTUAL : undefined;
@@ -61,13 +86,24 @@ export function Room() {
   return (
     <div className="room">
       <div className="room-scene-wrap" onClick={focus !== null ? () => setFocus(null) : undefined}>
-        <div className={`room-scene${focus !== null ? " room-scene--blurred" : ""}`}>
+        <div ref={sceneRef} className={`room-scene${focus !== null ? " room-scene--blurred" : ""}`}>
           <div className="room-floor" />
-          <Backline onFocusAmp={() => setFocus("amp")} />
-          <svg className="room-cable" viewBox="0 0 560 26" aria-hidden="true">
-            <path d="M10 4 C 120 30, 440 30, 550 4" fill="none" stroke="#222226" strokeWidth="2" />
-          </svg>
-          <PedalRow pedals={pedals} onFocusPedal={setFocus} onToggleBypass={toggleBypass} />
+          <CableLayer
+            containerRef={sceneRef}
+            order={pedals.map((p) => p.id)}
+            jacksRef={jacksRef}
+            ampAnchorRef={ampAnchorRef}
+            active={cablesActive}
+          />
+          <Backline onFocusAmp={() => setFocus("amp")} ampAnchorRef={ampAnchorRef} />
+          <PedalRow
+            pedals={pedals}
+            onFocusPedal={setFocus}
+            onToggleBypass={toggleBypass}
+            onReorder={reorderPedals}
+            jacksRef={jacksRef}
+            onActivityChange={setCablesActive}
+          />
         </div>
       </div>
 

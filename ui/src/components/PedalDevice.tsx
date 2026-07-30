@@ -10,10 +10,14 @@ export interface PedalDeviceProps {
   focused: boolean;
   onFocus?: () => void;
   onToggleBypass: () => void;
+  /** Reports the IN/OUT jack elements as they mount, for cable geometry. Wide-row instances only. */
+  onJackRef?: (which: "in" | "out", el: HTMLElement | null) => void;
+  /** Shift+ArrowLeft/Right: swap this pedal with its neighbor in `direction`. */
+  onSwap?: (direction: -1 | 1) => void;
 }
 
 /** Family-colored stompbox: decorative knobs in the wide shot, interactive when focused. */
-export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass }: PedalDeviceProps) {
+export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass, onJackRef, onSwap }: PedalDeviceProps) {
   const knobSize = focused ? 57 : 32;
 
   const handleFootswitchClick = (e: MouseEvent) => {
@@ -32,6 +36,10 @@ export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass 
         .filter(Boolean)
         .join(" ")}
     >
+      <div className="pedal-jacks" aria-hidden="true">
+        <span className="pedal-jack pedal-jack--in" ref={(el) => onJackRef?.("in", el)} />
+        <span className="pedal-jack pedal-jack--out" ref={(el) => onJackRef?.("out", el)} />
+      </div>
       <div className="pedal-panel">
         {pedal.knobs.map((k) =>
           focused ? (
@@ -65,6 +73,11 @@ export function PedalDevice({ pedal, bypassed, focused, onFocus, onToggleBypass 
   // A div (not a <button>) because the footswitch inside `body` is itself a
   // button — nested buttons are invalid HTML. Enter/Space still focus the gear.
   const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      onSwap?.(e.key === "ArrowRight" ? 1 : -1);
+      return;
+    }
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
     onFocus?.();

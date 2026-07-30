@@ -10,6 +10,16 @@
   gap: 34px;
 }
 
+.pedal-slot {
+  touch-action: none;
+}
+
+.pedal-slot--dragging {
+  position: relative;
+  z-index: 1;
+  cursor: grabbing;
+}
+
 .pedal-row-add {
   width: 120px;
   height: 96px;

@@ -1,0 +1,23 @@
+.cable-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1; /* above the floor, below the backline so the amp end tucks behind it, below the pedal row */
+  pointer-events: none;
+  overflow: visible;
+}
+
+.cable-line {
+  fill: none;
+  stroke: #222226;
+  stroke-width: 2.4px;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+/* A whisper of sheen down the middle so the cable reads as round, not flat. Quiet on purpose. */
+.cable-highlight {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.05);
+  stroke-width: 0.9px;
+  stroke-linecap: round;
+}

@@ -46,18 +46,6 @@
   background: var(--room-floor-bg);
 }
 
-.room-cable {
-  position: absolute;
-  bottom: 38px;
-  left: 50%;
-  width: 560px;
-  height: 26px;
-  transform: translateX(-50%);
-  z-index: 1;
-  opacity: 0.5;
-  pointer-events: none;
-}
-
 /* Sits above the scene, below chrome. Transparent letterbox lets clicks fall
    through to room-scene-wrap (which steps back out to the wide shot); only
    the focused device itself is interactive. */

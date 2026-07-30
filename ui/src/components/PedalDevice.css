@@ -22,12 +22,46 @@
 .pedal--wide {
   transform: scale(0.82);
   transform-origin: bottom center;
+  /*
+   * Fixes a faint light hairline that used to trace the rounded bottom
+   * edge of every pedal in the wide shot. Cause: the bottom inset shadow
+   * (below) darkens the shell near its rounded corners, but at this
+   * fractional scale (170px * 0.82 = a non-integer device-pixel box) the
+   * browser can rasterize that inset shadow's rounded clip a hair off
+   * from the shell's own border-radius clip, leaving a sliver of
+   * un-darkened (hence lighter) shell showing right at the seam. Forcing
+   * one consistent clip for everything painted inside the rounded box
+   * removes the mismatch. Scoped to wide only — focused pedals aren't
+   * scaled and the knob tooltip needs to overflow past the shell there.
+   */
+  overflow: hidden;
 }
 
 .pedal--focused {
   --pw: 300px;
   border-radius: 18px;
   padding: 18px 18px 20px;
+}
+
+.pedal-jacks {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 16px;
+  pointer-events: none;
+}
+
+.pedal-jack {
+  width: calc(var(--pw) * 0.05);
+  height: calc(var(--pw) * 0.05);
+  min-width: 5px;
+  min-height: 5px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #4c4c53, #19191c 72%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 1px 1px rgba(0, 0, 0, 0.5);
 }
 
 .pedal-panel {

@@ -14,12 +14,24 @@
 }
 
 .backline-cab {
+  position: relative;
   width: calc(520px * 1.06);
   border-radius: 10px;
   padding: 12px;
   margin-top: 10px;
   background: repeating-linear-gradient(25deg, rgba(255, 255, 255, 0.014) 0 2px, transparent 2px 4px), linear-gradient(180deg, #202024, #141417);
   box-shadow: 0 24px 44px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Geometry-only: where the last pedal's cable ends, up under the amp head's
+   lower edge (the amp sits directly above with a 10px gap; -16px pulls the
+   point up into the amp head's own painted box so the cable tucks behind it). */
+.backline-cable-anchor {
+  position: absolute;
+  top: -16px;
+  left: 55%;
+  width: 1px;
+  height: 1px;
 }
 
 .backline-cloth {
