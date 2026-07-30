@@ -1,0 +1,68 @@
+.knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.knob-cap {
+  position: relative;
+  width: var(--knob-size, 46px);
+  height: var(--knob-size, 46px);
+  border-radius: 50%;
+  touch-action: none;
+  cursor: ns-resize;
+  background: radial-gradient(circle at 36% 28%, #3c3c42 0%, #141416 68%);
+  box-shadow:
+    0 calc(var(--knob-size, 46px) * 0.09) calc(var(--knob-size, 46px) * 0.2) rgba(0, 0, 0, 0.6),
+    inset 0 1px 1px rgba(255, 255, 255, 0.16),
+    inset 0 calc(var(--knob-size, 46px) * -0.045) calc(var(--knob-size, 46px) * 0.1) rgba(0, 0, 0, 0.6);
+  outline: none;
+}
+
+.knob-cap:focus-visible {
+  box-shadow:
+    0 calc(var(--knob-size, 46px) * 0.09) calc(var(--knob-size, 46px) * 0.2) rgba(0, 0, 0, 0.6),
+    inset 0 1px 1px rgba(255, 255, 255, 0.16),
+    inset 0 calc(var(--knob-size, 46px) * -0.045) calc(var(--knob-size, 46px) * 0.1) rgba(0, 0, 0, 0.6),
+    0 0 0 2px var(--text-mid);
+}
+
+.knob-pointer {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--knob-size, 46px) * 0.095);
+  width: calc(var(--knob-size, 46px) * 0.045);
+  height: calc(var(--knob-size, 46px) * 0.32);
+  margin-left: calc(var(--knob-size, 46px) * -0.0225);
+  border-radius: 1px;
+  background: #e8e8ea;
+  transform-origin: 50% calc(var(--knob-size, 46px) * 0.405);
+  transform: rotate(var(--knob-angle, 0deg));
+  pointer-events: none;
+}
+
+/* Value tooltip: only while dragging/hovering, never at rest. */
+.knob-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: #1d1d22;
+  box-shadow: inset 0 0 0 1px #2e2e35, 0 4px 10px rgba(0, 0, 0, 0.5);
+  color: var(--text-hi);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.knob-label {
+  font-size: var(--label-size);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--text-mid);
+}

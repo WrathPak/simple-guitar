@@ -1,0 +1,27 @@
+.botbar {
+  min-height: var(--botbar-height);
+  background: var(--chrome-bg);
+  border-top: 1px solid var(--chrome-hairline);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  flex-shrink: 0;
+}
+
+.botbar-group {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.botbar-label {
+  font-size: var(--label-size);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--text-low);
+}
+
+.botbar-label--active {
+  color: var(--text-mid);
+}

@@ -1,0 +1,40 @@
+.rail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rail-icon {
+  width: 30px;
+  height: 24px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mid);
+  position: relative;
+}
+
+.rail-icon svg {
+  display: block;
+}
+
+.rail-icon--on {
+  color: #c9c9cf;
+}
+
+.rail-icon--off {
+  opacity: 0.35;
+}
+
+.rail-icon--sel {
+  background: #1d1d22;
+  color: #fff;
+  box-shadow: inset 0 0 0 1px #2e2e35;
+}
+
+.rail-plus {
+  color: var(--text-low);
+  font-size: 13px;
+  padding: 0 2px;
+}

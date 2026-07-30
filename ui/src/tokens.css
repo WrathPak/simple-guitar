@@ -1,0 +1,122 @@
+/*
+ * Simple Guitar — design tokens
+ * Source of truth: design/DESIGN.md §2. Do not hand-tune colors/type in
+ * components — reference these custom properties instead.
+ */
+
+:root {
+  /* ---- Chrome (monochrome, always) ---- */
+  --chrome-bg: #0a0a0c;
+  --chrome-hairline: #17171a;
+
+  /* Stage: radial #1a1a20 -> #0e0e11 -> #08080a (120% 90% at 50% -10%) + bottom vignette */
+  --stage-bg-a: #1a1a20;
+  --stage-bg-b: #0e0e11;
+  --stage-bg-c: #08080a;
+  --stage-vignette: rgba(0, 0, 0, 0.55);
+  --stage-bg: radial-gradient(
+    120% 90% at 50% -10%,
+    var(--stage-bg-a) 0%,
+    var(--stage-bg-b) 45%,
+    var(--stage-bg-c) 100%
+  );
+  --stage-vignette-bg: radial-gradient(
+    80% 60% at 50% 108%,
+    var(--stage-vignette),
+    transparent 60%
+  );
+
+  --text-hi: #e6e6e9;
+  --text-mid: #7c7c85;
+  --text-low: #4c4c54;
+
+  --state-unsaved: #b9974a;
+
+  /* Meters: vertical gradient */
+  --meter-fill-0: #3fae62;
+  --meter-fill-92: #d8c24a;
+  --meter-fill-100: #cf5340;
+  --meter-fill: linear-gradient(
+    to top,
+    var(--meter-fill-0) 0%,
+    var(--meter-fill-0) 70%,
+    var(--meter-fill-92) 92%,
+    var(--meter-fill-100) 100%
+  );
+
+  /* ---- Typography ---- */
+  --font-face: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --label-size: 9.5px;
+  --label-tracking: 0.16em;
+  --label-weight: 600;
+
+  --preset-size: 12.5px;
+  --preset-weight: 550;
+
+  /* Engraved plate text (amp faceplate) */
+  --plate-text-color: #33302a;
+  --plate-label-color: #6d6759;
+  --plate-text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
+
+  --min-text-size: 8.5px;
+
+  /* ---- Window anatomy ---- */
+  --topbar-height: 74px;
+  --botbar-height: 44px;
+
+  /* ---- Device family colors (the only saturated color in the app) ---- */
+  /* Drive / Dist / Fuzz — moss enclosure, amber LED */
+  --family-drive-grad-a: #2e4438;
+  --family-drive-grad-b: #22332a;
+  --family-drive-led: #e08a1e;
+
+  /* Dynamics — graphite enclosure, white LED */
+  --family-dynamics-grad-a: #41414a;
+  --family-dynamics-grad-b: #303038;
+  --family-dynamics-led: #f2f2f5;
+
+  /* EQ / Filter — bronze enclosure, warm-white LED */
+  --family-eq-grad-a: #4a4436;
+  --family-eq-grad-b: #383426;
+  --family-eq-led: #f5eede;
+
+  /* Modulation — steel blue enclosure, ice LED */
+  --family-modulation-grad-a: #2f4356;
+  --family-modulation-grad-b: #243444;
+  --family-modulation-led: #9fd8ff;
+
+  /* Delay — plum enclosure, violet LED */
+  --family-delay-grad-a: #3a3348;
+  --family-delay-grad-b: #2a2536;
+  --family-delay-led: #8a5fe6;
+
+  /* Reverb — deep teal enclosure, cyan LED */
+  --family-reverb-grad-a: #274046;
+  --family-reverb-grad-b: #1d3036;
+  --family-reverb-led: #3fb6d8;
+
+  /* Pitch / Synth — wine enclosure, pink LED */
+  --family-pitch-grad-a: #4b2f3f;
+  --family-pitch-grad-b: #392430;
+  --family-pitch-led: #e0699c;
+
+  /* Utility & hosted plugins — matte black enclosure, green LED */
+  --family-utility-grad-a: #26262b;
+  --family-utility-grad-b: #1b1b1f;
+  --family-utility-led: #3fae62;
+
+  /* Amp (NAM) — dark tolex + cream plate, red pilot lamp */
+  --family-amp-grad-a: #232328;
+  --family-amp-grad-b: #17171b;
+  --family-amp-plate-a: #efe8d6;
+  --family-amp-plate-b: #ded5bd;
+  --family-amp-lamp-a: #ffb08a;
+  --family-amp-lamp-b: #d24a1e;
+  --family-amp-lamp-c: #7c220c;
+
+  /* ---- Animation budget ---- */
+  --stage-swap-duration: 190ms;
+  --stage-swap-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --stage-swap-rise: 8px;
+}
