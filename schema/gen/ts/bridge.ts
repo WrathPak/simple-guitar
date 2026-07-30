@@ -6,7 +6,7 @@
  */
 
 /**
- * Simple Guitar C++ <-> React bridge protocol, v0. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
+ * Simple Guitar C++ <-> React bridge protocol, v1. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
  *
  * Union of every message that can cross the bridge in either direction, discriminated by the `type` field.
  */
@@ -14,11 +14,23 @@ export type BridgeMessage = UiToEngineMessage | EngineToUiMessage;
 /**
  * Union of every message the React UI may send to the C++ engine.
  */
-export type UiToEngineMessage = SetParam;
+export type UiToEngineMessage = SetParam | LoadNamModel | LoadIr | RequestRigState;
 /**
- * Identifiers for host-automatable parameters exposed by the engine's APVTS. Currently only the M0 output gain passthrough param exists; new params are added here first.
+ * Identifiers for host-automatable parameters exposed by the engine's APVTS. M1 adds the gate/amp/cab rig params; new params are added here first.
  */
-export type ParamId = "outputGain";
+export type ParamId =
+  | "outputGain"
+  | "gateOn"
+  | "gateThresholdDb"
+  | "ampInputDb"
+  | "ampBassDb"
+  | "ampMidDb"
+  | "ampTrebleDb"
+  | "ampPresenceDb"
+  | "namNormalize"
+  | "cabOn"
+  | "cabLowCutHz"
+  | "cabHighCutHz";
 /**
  * A parameter value normalized to the JUCE APVTS convention of 0..1, regardless of the parameter's real-world range/units (e.g. outputGain's underlying range is -60..+12 dB). The engine owns the mapping in both directions.
  */
@@ -26,7 +38,7 @@ export type NormalizedParamValue = number;
 /**
  * Union of every message the C++ engine may send to the React UI.
  */
-export type EngineToUiMessage = MeterFrame | StateChanged;
+export type EngineToUiMessage = MeterFrame | StateChanged | RigState | LoadResult;
 /**
  * A signal level expressed in dBFS, as reported by a meter tap. Not clamped in the schema since engines may report -inf for digital silence; consumers should treat very negative / non-finite values as silence.
  */
@@ -34,7 +46,11 @@ export type DecibelValue = number;
 /**
  * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing.
  */
-export type SchemaVersion = 0;
+export type SchemaVersion = 1;
+/**
+ * Which loader a loadResult reports on.
+ */
+export type LoadResultKind = "nam" | "ir";
 
 /**
  * UI -> engine. Set a parameter to a new normalized value, e.g. from a knob drag. The engine is the source of truth for the resulting real-world value and will echo it back via stateChanged.
@@ -43,6 +59,26 @@ export interface SetParam {
   type: "setParam";
   paramId: ParamId;
   value: NormalizedParamValue;
+}
+/**
+ * UI -> engine. Load a .nam model file. path must be an absolute path inside the managed Models library folder; the engine rejects anything else. The engine responds with a loadResult (kind: "nam") followed by a fresh rigState once the load completes (success or failure).
+ */
+export interface LoadNamModel {
+  type: "loadNamModel";
+  path: string;
+}
+/**
+ * UI -> engine. Load a cab IR file (.wav/.aiff). path must be an absolute path inside the managed IRs library folder; the engine rejects anything else. The engine responds with a loadResult (kind: "ir") followed by a fresh rigState once the load completes (success or failure).
+ */
+export interface LoadIr {
+  type: "loadIr";
+  path: string;
+}
+/**
+ * UI -> engine. Ask for a fresh rigState snapshot, e.g. when a library/overlay view mounts. The engine rescans the Models/IRs library folders before replying.
+ */
+export interface RequestRigState {
+  type: "requestRigState";
 }
 /**
  * Engine -> UI. A single coalesced metering sample, pushed on a 30-60Hz timer off the audio thread (never per-block). M0 carries just the passthrough in/out peaks; more taps (per-block, tuner, etc.) are added as new fields in later milestones, not new message types.
@@ -65,4 +101,38 @@ export interface StateChanged {
  */
 export interface ParamValueMap {
   [k: string]: NormalizedParamValue;
+}
+/**
+ * Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any) and the managed library contents. Sent on page load, after any loadNamModel/loadIr completes, and in reply to requestRigState.
+ */
+export interface RigState {
+  type: "rigState";
+  schemaVersion: SchemaVersion;
+  namModelName: string | null;
+  namModelSampleRate: number;
+  irName: string | null;
+  library: RigLibrary;
+}
+/**
+ * Contents of the managed library folders (Documents/Simple Guitar/Models, .../IRs), rescanned each time a rigState is produced.
+ */
+export interface RigLibrary {
+  models: LibraryEntry[];
+  irs: LibraryEntry[];
+}
+/**
+ * One file in the managed Models or IRs library folder.
+ */
+export interface LibraryEntry {
+  name: string;
+  path: string;
+}
+/**
+ * Engine -> UI. Outcome of a loadNamModel or loadIr request. message is a human-readable success/failure description (e.g. the resolved model name, or an error). Always followed by a rigState with the up-to-date snapshot.
+ */
+export interface LoadResult {
+  type: "loadResult";
+  kind: LoadResultKind;
+  ok: boolean;
+  message: string;
 }

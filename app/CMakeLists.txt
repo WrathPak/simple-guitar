@@ -95,6 +95,7 @@ target_sources(SimpleGuitar
         source/PluginProcessor.cpp
         source/PluginEditor.cpp
         source/WebviewBridge.cpp
+        source/RigLibrary.cpp
 )
 
 target_compile_definitions(SimpleGuitar

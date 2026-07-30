@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -8,37 +9,49 @@
 #include "PluginProcessor.h"
 
 /**
-    Hand-rolled bridge between the React UI (loaded into a WebBrowserComponent)
-    and the processor's APVTS "outputGain" parameter + MeterTap.
+    Bridge between the React UI (loaded into a WebBrowserComponent) and the
+    processor's APVTS params, NAM/IR loaders, managed library, and MeterTap.
 
-    This conforms exactly to the wire contract documented in
-    ui/src/bridge/sliderState.ts and ui/src/bridge/meterFrame.ts, which is a
-    small hand-rolled protocol built directly on the two primitives JUCE
-    injects when native integration is enabled (window.__JUCE__.backend.
-    addEventListener / emitEvent) -- NOT JUCE's own WebSliderRelay wire format
-    (which uses an "eventType" key); ours uses "type", matching the UI:
+    Wire contract (matches ui/src/bridge/*.ts):
 
-      JS -> native, channel "outputGain":
+    Every param id in SimpleGuitarAudioProcessor::allParamIds is its own
+    channel (name == the id, e.g. "outputGain", "gateThresholdDb", ...):
+
+      JS -> native, channel "<paramId>":
         { type: "valueChanged", value: <0..1 normalized> }
         { type: "gestureStart" }
         { type: "gestureEnd" }
-      native -> JS, channel "outputGain":
+      native -> JS, channel "<paramId>":
         { type: "valueChanged", value: <0..1 normalized> }
           -- pushed once right after the page finishes loading, and again
              whenever the host changes the parameter without the UI having
              caused it (automation, preset/state restore).
-      native -> JS, channel "meterFrame" (~30Hz, via
-        WebBrowserComponent::emitEventIfBrowserIsVisible so nothing is sent
-        while the editor isn't visible):
-        { inPeakDb: number, outPeakDb: number }
 
-    Meter note: the processor only taps a single post-gain (post sg::Gain)
-    stereo peak meter (see PluginProcessor::processBlock: input -> gain ->
-    meterTap -> output). There is no separate pre-gain tap. outPeakDb is
-    therefore the real measured post-gain peak; inPeakDb is derived from it
-    by undoing the currently-applied gain in dB (in = out - gainDb), which is
-    exact for a pure gain stage modulo the ~20ms smoothing ramp in sg::Gain.
-    This is a known M0 simplification -- see the handoff report.
+    native -> JS, channel "meterFrame" (~30Hz, via
+      WebBrowserComponent::emitEventIfBrowserIsVisible so nothing is sent
+      while the editor isn't visible):
+      { inPeakDb: number, outPeakDb: number }
+
+    JS -> native, channel "loadNamModel": { type: "loadNamModel", path: string }
+    JS -> native, channel "loadIr":       { type: "loadIr", path: string }
+    JS -> native, channel "requestRigState": { type: "requestRigState" }
+      -- path must resolve inside the managed library folder (see
+         RigLibrary.h); anything else is rejected with a loadResult{ok:false}
+         and no load is attempted.
+
+    native -> JS, channel "loadResult":
+      { type: "loadResult", kind: "nam" | "ir", ok: boolean, message: string }
+      -- sent once a loadNamModel/loadIr request (valid or rejected) has been
+         resolved; always followed by a fresh "rigState".
+
+    native -> JS, channel "rigState":
+      { type: "rigState", schemaVersion, namModelName: string|null,
+        namModelSampleRate: number, irName: string|null,
+        library: { models: [{name,path}], irs: [{name,path}] } }
+      -- sent on page load, after any load request resolves, and in reply to
+         "requestRigState". Rescans the library folders each time.
+
+    See schema/bridge.schema.json for the authoritative message shapes.
 */
 class WebviewBridge final : private juce::Timer
 {
@@ -46,36 +59,60 @@ public:
     explicit WebviewBridge (SimpleGuitarAudioProcessor& processorToUse);
     ~WebviewBridge() override;
 
-    /** The relay/channel names, shared with ui/src/bridge/*.ts. */
-    static constexpr const char* outputGainChannelId = "outputGain";
     static constexpr const char* meterFrameChannelId = "meterFrame";
+    static constexpr const char* loadNamModelChannelId = "loadNamModel";
+    static constexpr const char* loadIrChannelId = "loadIr";
+    static constexpr const char* requestRigStateChannelId = "requestRigState";
+    static constexpr const char* rigStateChannelId = "rigState";
+    static constexpr const char* loadResultChannelId = "loadResult";
 
-    /** Build the event listener to pass to
-        WebBrowserComponent::Options::withEventListener (outputGainChannelId, ...). */
-    juce::WebBrowserComponent::NativeEventListener makeOutputGainListener();
+    /** Bridge protocol version, carried on every rigState message (see
+        schema/bridge.schema.json SchemaVersion). */
+    static constexpr int schemaVersion = 1;
+
+    /** Registers the valueChanged/gestureStart/gestureEnd listener for every
+        param channel plus the loadNamModel/loadIr/requestRigState command
+        channels, and returns the updated Options (builder pattern) -- chain
+        this while constructing the WebBrowserComponent::Options. */
+    juce::WebBrowserComponent::Options attachListenersTo (juce::WebBrowserComponent::Options opts);
 
     /** Call once the WebBrowserComponent exists (e.g. from pageFinishedLoading()).
-        Pushes the current parameter value to the UI and starts the ~30Hz
-        meter/automation-echo timer. Safe to call more than once (e.g. on
-        page reload); each call re-pushes the initial value. */
+        Pushes the current value of every param plus a fresh rigState to the UI,
+        and starts the ~30Hz meter/automation-echo timer. Safe to call more than
+        once (e.g. on page reload); each call re-pushes everything. */
     void attachBrowser (juce::WebBrowserComponent* browserToUse);
 
 private:
-    void handleOutputGainEvent (const juce::var& event);
-    void pushCurrentValueToUi();
+    void handleParamEvent (int paramIndex, const juce::var& event);
+    void handleLoadNamModel (const juce::var& event);
+    void handleLoadIr (const juce::var& event);
+    void handleRequestRigState (const juce::var& event);
+
+    void pushParamValueToUi (int paramIndex);
+    void sendRigState();
+    void sendLoadResult (const char* kind, bool ok, const juce::String& message);
+
     void timerCallback() override;
 
     SimpleGuitarAudioProcessor& processor;
-    juce::RangedAudioParameter& outputGainParam;
     juce::WebBrowserComponent* browser = nullptr;
 
-    // Last normalized value we know the UI has (either because we just sent
-    // it, or the UI just told us). Used to suppress redundant automation-echo
-    // events and avoid a feedback loop between the two directions.
-    std::atomic<float> lastKnownUiValue { -1.0f };
+    // One entry per SimpleGuitarAudioProcessor::allParamIds, same order.
+    std::array<juce::RangedAudioParameter*, SimpleGuitarAudioProcessor::numParams> params {};
+
+    // Last normalized value we know the UI has for each param (either
+    // because we just sent it, or the UI just told us). Used to suppress
+    // redundant automation-echo events and avoid a feedback loop.
+    std::array<std::atomic<float>, SimpleGuitarAudioProcessor::numParams> lastKnownUiValue;
 
     static constexpr float meterFloorDb = -60.0f;
     static constexpr int meterTimerHz = 30;
 
+    // NAM model loads complete asynchronously on the message thread (via
+    // MessageManager::callAsync inside sg::NamProcessor); if the editor (and
+    // this bridge) is destroyed while a load is in flight, the completion
+    // lambda must not touch a dangling `this`. IR loads complete
+    // synchronously today but are guarded the same way defensively.
+    JUCE_DECLARE_WEAK_REFERENCEABLE (WebviewBridge)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WebviewBridge)
 };

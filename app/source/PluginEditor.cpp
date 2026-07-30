@@ -105,19 +105,19 @@ SimpleGuitarAudioProcessorEditor::SimpleGuitarAudioProcessorEditor (SimpleGuitar
     : AudioProcessorEditor (&p),
       processorRef (p),
       bridge (p),
-      webView (juce::WebBrowserComponent::Options {}
+      webView (bridge.attachListenersTo (
+          juce::WebBrowserComponent::Options {}
 #if JUCE_WINDOWS
-                   .withBackend (juce::WebBrowserComponent::Options::Backend::webview2)
-                   .withWinWebView2Options (
-                       juce::WebBrowserComponent::Options::WinWebView2 {}
-                           .withUserDataFolder (juce::File::getSpecialLocation (juce::File::SpecialLocationType::tempDirectory)))
+              .withBackend (juce::WebBrowserComponent::Options::Backend::webview2)
+              .withWinWebView2Options (
+                  juce::WebBrowserComponent::Options::WinWebView2 {}
+                      .withUserDataFolder (juce::File::getSpecialLocation (juce::File::SpecialLocationType::tempDirectory)))
 #endif
-                   // Default backend elsewhere (WKWebView on macOS) -- untested on this
-                   // Windows-only build machine, but requires no extra wiring: JUCE picks
-                   // it automatically when no explicit backend is requested.
-                   .withNativeIntegrationEnabled (true)
-                   .withEventListener (WebviewBridge::outputGainChannelId, bridge.makeOutputGainListener())
-                   .withResourceProvider (&SimpleGuitarAudioProcessorEditor::getUiResource))
+              // Default backend elsewhere (WKWebView on macOS) -- untested on this
+              // Windows-only build machine, but requires no extra wiring: JUCE picks
+              // it automatically when no explicit backend is requested.
+              .withNativeIntegrationEnabled (true)
+              .withResourceProvider (&SimpleGuitarAudioProcessorEditor::getUiResource)))
 {
     webView.onFinishedLoading = [this]
     {
