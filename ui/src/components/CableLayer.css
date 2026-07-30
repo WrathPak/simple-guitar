@@ -8,16 +8,17 @@
 
 .cable-line {
   fill: none;
-  stroke: #222226;
-  stroke-width: 2.4px;
+  stroke: #1a1a1d;
+  stroke-width: 5px;
   stroke-linecap: round;
-  opacity: 0.85;
+  stroke-linejoin: round;
 }
 
-/* A whisper of sheen down the middle so the cable reads as round, not flat. Quiet on purpose. */
+/* A lighter sheen down the middle so the thick cable reads as a round rubber cord, not a flat ribbon. */
 .cable-highlight {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.05);
-  stroke-width: 0.9px;
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-width: 1px;
   stroke-linecap: round;
+  stroke-linejoin: round;
 }

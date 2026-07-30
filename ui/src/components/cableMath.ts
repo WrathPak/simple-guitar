@@ -1,8 +1,13 @@
 /**
- * Pure geometry for a patch cable drawn between two jack points: a cubic
- * bezier with its control points dropped below the straight line between
- * the endpoints, so it reads as a length of real cable sagging under its
- * own weight rather than a straight wire.
+ * Pure geometry for the two kinds of patch cable on the floor:
+ *
+ * - Pedal to pedal: exits the OUT jack going straight up, arches proudly
+ *   above the pedal tops, and drops straight down into the next IN jack —
+ *   a cable dressed in a deliberate loop, not a wire sagging under gravity.
+ * - Last pedal to the amp: stylized orthogonal routing — straight up,
+ *   a rounded 90° corner, a clean horizontal run, another rounded corner,
+ *   then straight up behind the amp — the way a pedalboard gets dressed
+ *   for a photo.
  */
 
 export interface Point {
@@ -10,25 +15,96 @@ export interface Point {
   y: number;
 }
 
-export const MIN_SAG_PX = 16;
-export const MAX_SAG_PX = 64;
-/** Sag grows with span, but is clamped so short and long runs both look right. */
-export const SAG_RATIO = 0.16;
-
-export function sagAmount(a: Point, b: Point): number {
-  const span = Math.hypot(b.x - a.x, b.y - a.y);
-  return Math.min(MAX_SAG_PX, Math.max(MIN_SAG_PX, span * SAG_RATIO));
-}
-
-/** SVG path `d` string for a sagging cable from `a` to `b`. */
-export function cablePath(a: Point, b: Point): string {
-  const sag = sagAmount(a, b);
-  const midY = (a.y + b.y) / 2 + sag;
-  const c1: Point = { x: a.x + (b.x - a.x) * 0.28, y: midY };
-  const c2: Point = { x: a.x + (b.x - a.x) * 0.72, y: midY };
-  return `M ${round(a.x)} ${round(a.y)} C ${round(c1.x)} ${round(c1.y)}, ${round(c2.x)} ${round(c2.y)}, ${round(b.x)} ${round(b.y)}`;
-}
-
 function round(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, n));
+}
+
+// ---- Pedal-to-pedal arch ----------------------------------------------
+
+export const MIN_ARCH_HEIGHT = 30;
+export const MAX_ARCH_HEIGHT = 45;
+/** How much of the peak-to-peak span becomes arch height, before clamping. */
+const ARCH_HEIGHT_RATIO = 0.3;
+/** How flat the top of the arch is: half-width of the flat span, before clamping. */
+const ARCH_SPREAD_RATIO = 0.2;
+const MAX_ARCH_SPREAD = 36;
+
+function archHeightFor(span: number): number {
+  return clamp(Math.abs(span) * ARCH_HEIGHT_RATIO, MIN_ARCH_HEIGHT, MAX_ARCH_HEIGHT);
+}
+
+function archSpreadFor(span: number): number {
+  return Math.min(Math.abs(span) * ARCH_SPREAD_RATIO, MAX_ARCH_SPREAD);
+}
+
+/**
+ * SVG path `d` for a pedal-to-pedal cable: a short vertical stub up from
+ * `a`, a flat-topped rounded arch above the jack line, then a stub straight
+ * down into `b`. Two cubic segments sharing a horizontal tangent at the
+ * apex, so the join is smooth.
+ */
+export function pedalArchPath(a: Point, b: Point): string {
+  const dx = b.x - a.x;
+  const midX = (a.x + b.x) / 2;
+  const jackLine = Math.min(a.y, b.y);
+  const apexY = jackLine - archHeightFor(dx);
+  const spread = archSpreadFor(dx);
+
+  const upCtrl: Point = { x: a.x, y: apexY };
+  const preApex: Point = { x: midX - spread, y: apexY };
+  const apex: Point = { x: midX, y: apexY };
+  const postApex: Point = { x: midX + spread, y: apexY };
+  const downCtrl: Point = { x: b.x, y: apexY };
+
+  return [
+    `M ${round(a.x)} ${round(a.y)}`,
+    `C ${round(upCtrl.x)} ${round(upCtrl.y)}, ${round(preApex.x)} ${round(preApex.y)}, ${round(apex.x)} ${round(apex.y)}`,
+    `C ${round(postApex.x)} ${round(postApex.y)}, ${round(downCtrl.x)} ${round(downCtrl.y)}, ${round(b.x)} ${round(b.y)}`,
+  ].join(" ");
+}
+
+// ---- Last pedal to amp: orthogonal routing ----------------------------
+
+export const DEFAULT_CORNER_RADIUS = 17;
+/** Cubic-bezier approximation of a quarter circle. */
+const KAPPA = 0.5523;
+
+function cornerRadiusFor(desired: number, ...spans: number[]): number {
+  const maxAllowed = Math.max(4, Math.min(...spans.map((s) => Math.abs(s) / 2)));
+  return Math.max(4, Math.min(desired, maxAllowed));
+}
+
+/**
+ * SVG path `d` for the last pedal's cable up to the amp: straight up from
+ * `out`, a rounded 90° corner, a horizontal run at a height between the
+ * pedal row and the anchor, another rounded 90° corner, then straight up
+ * into `anchor` (which sits tucked behind the amp head).
+ */
+export function ampRoutePath(out: Point, anchor: Point, cornerRadius: number = DEFAULT_CORNER_RADIUS): string {
+  const dirX = anchor.x >= out.x ? 1 : -1;
+  const railY = (out.y + anchor.y) / 2;
+  const r = cornerRadiusFor(cornerRadius, out.y - railY, railY - anchor.y, anchor.x - out.x);
+
+  const p1: Point = { x: out.x, y: railY + r };
+  const p2: Point = { x: out.x + dirX * r, y: railY };
+  const c1a: Point = { x: out.x, y: railY + r - r * KAPPA };
+  const c1b: Point = { x: out.x + dirX * r * (1 - KAPPA), y: railY };
+
+  const p3: Point = { x: anchor.x - dirX * r, y: railY };
+  const p4: Point = { x: anchor.x, y: railY - r };
+  const c2a: Point = { x: anchor.x - dirX * r * (1 - KAPPA), y: railY };
+  const c2b: Point = { x: anchor.x, y: railY - r + r * KAPPA };
+
+  return [
+    `M ${round(out.x)} ${round(out.y)}`,
+    `L ${round(p1.x)} ${round(p1.y)}`,
+    `C ${round(c1a.x)} ${round(c1a.y)}, ${round(c1b.x)} ${round(c1b.y)}, ${round(p2.x)} ${round(p2.y)}`,
+    `L ${round(p3.x)} ${round(p3.y)}`,
+    `C ${round(c2a.x)} ${round(c2a.y)}, ${round(c2b.x)} ${round(c2b.y)}, ${round(p4.x)} ${round(p4.y)}`,
+    `L ${round(anchor.x)} ${round(anchor.y)}`,
+  ].join(" ");
 }

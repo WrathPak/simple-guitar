@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./CableLayer.css";
-import { cablePath, type Point } from "./cableMath";
+import { ampRoutePath, pedalArchPath, type Point } from "./cableMath";
 
 export interface JackPair {
   inEl: HTMLElement | null;
@@ -32,10 +32,11 @@ function centerOf(container: DOMRect, el: HTMLElement, edge: "top" | "topRight" 
 }
 
 /**
- * SVG overlay: a sagging patch cable from each pedal's OUT jack to the next
- * pedal's IN jack, and a final one from the last pedal's OUT to the anchor
- * behind the amp. Pure geometry read live from the DOM every time something
- * could have moved — no hardcoded coordinates.
+ * SVG overlay: an arched patch cable from each pedal's OUT jack up and over
+ * into the next pedal's IN jack, and a final orthogonal run from the last
+ * pedal's OUT jack up to the anchor behind the amp. Pure geometry read live
+ * from the DOM every time something could have moved — no hardcoded
+ * coordinates.
  */
 export function CableLayer({ containerRef, order, jacksRef, ampAnchorRef, active }: CableLayerProps) {
   const [paths, setPaths] = useState<string[]>([]);
@@ -57,7 +58,7 @@ export function CableLayer({ containerRef, order, jacksRef, ampAnchorRef, active
       if (!from?.outEl || !to?.inEl) continue;
       const a = centerOf(containerRect, from.outEl, "topRight");
       const b = centerOf(containerRect, to.inEl, "topLeft");
-      next.push(cablePath(a, b));
+      next.push(pedalArchPath(a, b));
     }
 
     const lastId = order[order.length - 1];
@@ -66,7 +67,7 @@ export function CableLayer({ containerRef, order, jacksRef, ampAnchorRef, active
     if (last?.outEl && anchor) {
       const a = centerOf(containerRect, last.outEl, "topRight");
       const b = centerOf(containerRect, anchor, "top");
-      next.push(cablePath(a, b));
+      next.push(ampRoutePath(a, b));
     }
 
     setPaths(next);

@@ -1,52 +1,129 @@
 import { describe, expect, it } from "vitest";
-import { cablePath, MAX_SAG_PX, MIN_SAG_PX, sagAmount } from "./cableMath";
+import { ampRoutePath, DEFAULT_CORNER_RADIUS, MAX_ARCH_HEIGHT, MIN_ARCH_HEIGHT, pedalArchPath } from "./cableMath";
 
-describe("sagAmount", () => {
-  it("clamps very short spans to the minimum sag", () => {
-    expect(sagAmount({ x: 0, y: 0 }, { x: 2, y: 0 })).toBe(MIN_SAG_PX);
+describe("pedalArchPath", () => {
+  it("starts and ends exactly at the given jack points", () => {
+    const d = pedalArchPath({ x: 10, y: 600 }, { x: 200, y: 600 });
+    expect(d.startsWith("M 10 600")).toBe(true);
+    expect(d.endsWith("200 600")).toBe(true);
   });
 
-  it("clamps very long spans to the maximum sag", () => {
-    expect(sagAmount({ x: 0, y: 0 }, { x: 2000, y: 0 })).toBe(MAX_SAG_PX);
+  it("is two cubic segments (an up-stub, arch, down-stub in one smooth curve)", () => {
+    const d = pedalArchPath({ x: 0, y: 600 }, { x: 150, y: 600 });
+    expect(d).toMatch(/^M [\d.-]+ [\d.-]+ C [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+ C [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+$/);
   });
 
-  it("grows with span in between", () => {
-    const short = sagAmount({ x: 0, y: 0 }, { x: 150, y: 0 });
-    const long = sagAmount({ x: 0, y: 0 }, { x: 250, y: 0 });
-    expect(long).toBeGreaterThan(short);
+  it("exits each jack going straight up: control points sit directly above the start/end x", () => {
+    const a = { x: 40, y: 600 };
+    const b = { x: 260, y: 600 };
+    const d = pedalArchPath(a, b);
+    const coords = d.match(/-?[\d.]+/g)!.map(Number);
+    // M ax ay  C c1x c1y, c2x c2y, apexX apexY  C c3x c3y, c4x c4y, bx by
+    const [, , c1x, , , , , c1y, , , c4x, c4y] = coords;
+    expect(c1x).toBeCloseTo(a.x, 5); // first control point directly above `a`
+    expect(c4x).toBeCloseTo(b.x, 5); // last control point directly above `b`
+    expect(c1y).toBeLessThan(a.y); // above the jack line
+    expect(c4y).toBeLessThan(b.y);
+  });
+
+  it("arches within the 30-45px design range for a normal pedal gap", () => {
+    const a = { x: 0, y: 600 };
+    const b = { x: 140, y: 600 }; // typical OUT-to-next-IN gap
+    const d = pedalArchPath(a, b);
+    const coords = d.match(/-?[\d.]+/g)!.map(Number);
+    const apexY = coords[7]; // end of first C command: apexX, apexY
+    const jackLine = Math.min(a.y, b.y);
+    const height = jackLine - apexY;
+    expect(height).toBeGreaterThanOrEqual(MIN_ARCH_HEIGHT);
+    expect(height).toBeLessThanOrEqual(MAX_ARCH_HEIGHT);
+  });
+
+  it("clamps arch height for a very short span to the minimum", () => {
+    const d = pedalArchPath({ x: 0, y: 600 }, { x: 4, y: 600 });
+    const coords = d.match(/-?[\d.]+/g)!.map(Number);
+    const apexY = coords[7];
+    expect(600 - apexY).toBeCloseTo(MIN_ARCH_HEIGHT, 5);
+  });
+
+  it("clamps arch height for a very long span to the maximum", () => {
+    const d = pedalArchPath({ x: 0, y: 600 }, { x: 900, y: 600 });
+    const coords = d.match(/-?[\d.]+/g)!.map(Number);
+    const apexY = coords[7];
+    expect(600 - apexY).toBeCloseTo(MAX_ARCH_HEIGHT, 5);
+  });
+
+  it("still arches above the jack line when the two jacks sit at slightly different heights", () => {
+    const a = { x: 0, y: 590 };
+    const b = { x: 150, y: 610 };
+    const d = pedalArchPath(a, b);
+    const coords = d.match(/-?[\d.]+/g)!.map(Number);
+    const apexY = coords[7];
+    expect(apexY).toBeLessThan(Math.min(a.y, b.y));
   });
 });
 
-describe("cablePath", () => {
-  it("starts and ends exactly at the given endpoints", () => {
-    const d = cablePath({ x: 10, y: 20 }, { x: 200, y: 40 });
-    expect(d.startsWith("M 10 20")).toBe(true);
-    expect(d.endsWith("200 40")).toBe(true);
+describe("ampRoutePath", () => {
+  it("starts at the OUT jack and ends at the anchor behind the amp", () => {
+    const out = { x: 700, y: 600 };
+    const anchor = { x: 500, y: 350 };
+    const d = ampRoutePath(out, anchor);
+    expect(d.startsWith("M 700 600")).toBe(true);
+    expect(d.endsWith("500 350")).toBe(true);
   });
 
-  it("produces a cubic bezier (one M, one C, two control points)", () => {
-    const d = cablePath({ x: 0, y: 0 }, { x: 100, y: 0 });
-    expect(d).toMatch(/^M [\d.-]+ [\d.-]+ C [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+$/);
+  it("is orthogonal routing: straight-up, rounded corner, straight-across, rounded corner, straight-up (3 L, 2 C)", () => {
+    const d = ampRoutePath({ x: 700, y: 600 }, { x: 500, y: 350 });
+    const lCount = (d.match(/(?:^|\s)L\s/g) ?? []).length;
+    const cCount = (d.match(/(?:^|\s)C\s/g) ?? []).length;
+    expect(lCount).toBe(3);
+    expect(cCount).toBe(2);
   });
 
-  it("drops both control points below the straight line between the endpoints (sag, not a taut wire)", () => {
-    const a = { x: 0, y: 100 };
-    const b = { x: 200, y: 100 };
-    const d = cablePath(a, b);
-    const match = d.match(/C ([\d.-]+) ([\d.-]+), ([\d.-]+) ([\d.-]+),/);
-    expect(match).not.toBeNull();
-    const [, , c1y, , c2y] = match!.map(Number);
-    expect(c1y).toBeGreaterThan(100);
-    expect(c2y).toBeGreaterThan(100);
+  it("runs horizontally at a height between the OUT jack and the anchor", () => {
+    const out = { x: 700, y: 600 };
+    const anchor = { x: 500, y: 350 };
+    const d = ampRoutePath(out, anchor);
+    const lMatches = [...d.matchAll(/L ([\d.-]+) ([\d.-]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }));
+    // lMatches[0] = top of the first vertical stub (just short of the rail), lMatches[1] = far end of the horizontal run.
+    const railY = (out.y + anchor.y) / 2;
+    expect(lMatches[1].y).toBeCloseTo(railY, 5);
+    expect(lMatches[1].y).toBeLessThan(out.y);
+    expect(lMatches[1].y).toBeGreaterThan(anchor.y);
+    expect(lMatches[0].y).toBeGreaterThan(lMatches[1].y); // still below the rail, approaching the first corner
   });
 
-  it("still sags for an upward-trending run (pedal to amp behind/above it)", () => {
-    const a = { x: 100, y: 300 };
-    const b = { x: 120, y: 50 }; // b is above a
-    const d = cablePath(a, b);
-    const match = d.match(/C ([\d.-]+) ([\d.-]+), ([\d.-]+) ([\d.-]+),/);
-    const [, , c1y] = match!.map(Number);
-    const straightMidY = (a.y + b.y) / 2;
-    expect(c1y).toBeGreaterThan(straightMidY);
+  it("turns toward the anchor's side: rightward when the anchor is to the right", () => {
+    const out = { x: 300, y: 600 };
+    const anchor = { x: 600, y: 350 };
+    const d = ampRoutePath(out, anchor);
+    const lMatches = [...d.matchAll(/L ([\d.-]+) ([\d.-]+)/g)].map((m) => Number(m[1]));
+    expect(lMatches[0]).toBeCloseTo(out.x, 5); // top of first stub still directly above `out`
+    expect(lMatches[1]).toBeGreaterThan(out.x); // far end of the horizontal run has moved toward the anchor
+  });
+
+  it("turns leftward when the anchor is to the left", () => {
+    const out = { x: 600, y: 600 };
+    const anchor = { x: 300, y: 350 };
+    const d = ampRoutePath(out, anchor);
+    const lMatches = [...d.matchAll(/L ([\d.-]+) ([\d.-]+)/g)].map((m) => Number(m[1]));
+    expect(lMatches[1]).toBeLessThan(out.x);
+  });
+
+  it("stays finite even for a huge requested radius on a cramped run", () => {
+    const out = { x: 500, y: 600 };
+    const anchor = { x: 520, y: 590 };
+    const d = ampRoutePath(out, anchor, 500);
+    const coords = d.match(/-?[\d.]+/g)!.map(Number);
+    expect(coords.every((n) => Number.isFinite(n))).toBe(true);
+  });
+
+  it("uses the requested corner radius when there's room for it (14-20px design range)", () => {
+    const out = { x: 700, y: 700 };
+    const anchor = { x: 400, y: 300 };
+    const d = ampRoutePath(out, anchor, DEFAULT_CORNER_RADIUS);
+    const lMatches = [...d.matchAll(/L ([\d.-]+) ([\d.-]+)/g)].map((m) => Number(m[2]));
+    const railY = (out.y + anchor.y) / 2;
+    // First L ends `cornerRadius` short of the rail (coming from below, y decreases upward).
+    expect(lMatches[0] - railY).toBeCloseTo(DEFAULT_CORNER_RADIUS, 5);
   });
 });
