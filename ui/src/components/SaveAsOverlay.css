@@ -1,0 +1,41 @@
+.saveas-overlay-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 6px 6px 10px;
+}
+
+.saveas-overlay-input {
+  background: #17171a;
+  border: 1px solid #26262c;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-hi);
+  /* The app's first text field -- exempt from the app-wide user-select:none
+     (see index.css) so typing/selecting/caret placement work normally. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.saveas-overlay-input::placeholder {
+  color: var(--text-low);
+}
+
+.saveas-overlay-input:focus-visible {
+  outline: none;
+  border-color: #3a3a42;
+}
+
+.saveas-overlay-input:disabled {
+  color: var(--text-mid);
+}
+
+.saveas-overlay-error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(207, 83, 64, 0.12);
+  color: #e2a49a;
+  font-size: 12px;
+  line-height: 1.4;
+}

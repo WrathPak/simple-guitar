@@ -3,6 +3,8 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <optional>
+#include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
@@ -19,6 +21,7 @@
 #include <sg/StereoDelay.h>
 
 #include "ChainOrder.h"
+#include "PresetStore.h"
 #include "RigLibrary.h"
 
 /**
@@ -50,6 +53,22 @@
     latency compensation still works for a headless host or pluginval run
     with no editor open) rather than from a parameter listener callback,
     which JUCE may invoke from the audio thread for host automation.
+
+    Presets (see PresetStore.h and the preset-manager section below): a flat
+    library of *.sgpreset files under Documents/Simple Guitar/Presets,
+    save/load/next/prev all message-thread only. loadPreset() reuses
+    setStateInformation's own restore path (apvts.replaceState() +
+    restoreLoadedPathsFromState()) so model/IR/chain order restore
+    identically whether the state came from a DAW session or a preset file.
+    Dirty tracking can't rely on AudioProcessorValueTreeState parameter
+    listeners for the same reason updateReportedLatency() above can't --
+    JUCE may invoke them from the audio thread for host automation -- so
+    "did any param change since the last save/load" is answered the same way
+    latency is: a low-rate message-thread poll (see timerCallback()) that
+    diffs every param's current normalized value against a baseline snapshot
+    taken at the last save/load. Model/IR-load and chain-reorder dirtying are
+    set directly at their own call sites instead (not on the poll), since
+    those aren't APVTS params.
 */
 class SimpleGuitarAudioProcessor final : public juce::AudioProcessor,
                                           private juce::Timer
@@ -184,16 +203,76 @@ public:
     static const char* pedalIdForSlot (sg::PedalSlot slot) noexcept;
     static bool pedalSlotForId (juce::StringRef id, sg::PedalSlot& outSlot) noexcept;
 
+    //==========================================================================
+    // Presets. See PresetStore.h for the on-disk format and the class-level
+    // comment above for the dirty-tracking design. Message-thread only --
+    // same rule as the NAM/IR loaders and setChainOrder above.
+
+    struct CurrentPreset
+    {
+        juce::String name;
+        juce::String path;
+    };
+
+    /** Rescans the managed Presets folder, sorted by name. */
+    std::vector<sg::PresetEntry> listPresets() const { return sg::scanPresets(); }
+
+    /** The current preset (name+path), if any preset has been saved to or
+        loaded this session (or restored from a DAW session's persisted
+        currentPresetPath/currentPresetName properties). */
+    std::optional<CurrentPreset> getCurrentPreset() const;
+
+    /** True if any APVTS param, the loaded model/IR, or the chain order has
+        changed since the last save/load (see the class-level comment for
+        how this is tracked). Safe to call from any thread (atomic load),
+        though only ever meaningfully written from the message thread. */
+    bool isPresetDirty() const noexcept { return presetDirty.load (std::memory_order_relaxed); }
+
+    /** Overwrites the current preset with the current rig state. False (no-op)
+        if there is no current preset -- callers should fall back to
+        savePresetAs() in that case. */
+    bool saveCurrentPreset (juce::String& outError);
+
+    /** Saves (or overwrites) a preset named `rawName` and makes it current.
+        `rawName` is sanitized into a safe filename; overwrite-if-a-preset-
+        with-that-name-already-exists is intentional, not an error. Fails
+        only if nothing sanitizable remains of the name, or the write itself
+        fails. */
+    bool savePresetAs (const juce::String& rawName, juce::String& outError);
+
+    /** Loads the preset at `path` (must resolve inside the managed Presets
+        folder) via the same restore path setStateInformation uses, so
+        model/IR/chain order restore identically to a DAW session load. */
+    bool loadPreset (const juce::String& path, juce::String& outError);
+
+    /** Steps to the next/previous preset (sorted by name) relative to the
+        current one, wrapping around; jumps to the first (next) / last (prev)
+        preset if none is current yet. False (no-op) if there are no
+        presets. */
+    bool nextPreset (juce::String& outError);
+    bool prevPreset (juce::String& outError);
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     /** Kicks off the state-restore load requests and restores the chain
-        order (message thread). Called from setStateInformation, marshaled
+        order (message thread). Called from setStateInformation (marshaled
         via MessageManager::callAsync since the host may call
-        setStateInformation from other threads. */
+        setStateInformation from other threads) and directly/synchronously
+        from loadPreset() (already guaranteed message-thread, so no marshal
+        needed there) -- the one shared restore path both go through. */
     void restoreLoadedPathsFromState();
+
+    /** requestLoadNamModel/requestLoadIr's real implementation, with an
+        extra `isRestoring` flag: true from restoreLoadedPathsFromState()
+        (DAW session restore or a preset load -- must NOT mark the preset
+        dirty, since restoring to a known-good state is the opposite of
+        dirtying it), false from the public methods below (a genuine
+        user-driven load via the bridge -- must mark it dirty on success). */
+    void requestLoadNamModelInternal (const juce::String& path, std::function<void (bool, juce::String)> onDone, bool isRestoring);
+    void requestLoadIrInternal (const juce::String& path, std::function<void (bool, juce::String)> onDone, bool isRestoring);
 
     /** Runs one pedal's atomic-driven setters + process() for the given
         slot. Audio-thread only (called from processBlock() in the order
@@ -205,18 +284,41 @@ private:
         comment for why this must never be called from the audio thread. */
     void updateReportedLatency();
 
+    /** Message-thread poll (see the class-level comment on dirty tracking):
+        if not already dirty, compares every param's current normalized value
+        against dirtyBaselineValues and marks dirty on the first difference
+        found. No-op once already dirty -- nothing to do until the next
+        save/load refreshes the baseline. */
+    void pollForDirtyParamChange();
+
+    /** Snapshots every param's current normalized value into
+        dirtyBaselineValues and clears presetDirty. Called once at
+        construction and after every successful save/load (including a DAW
+        session restore) -- see the class-level comment. */
+    void refreshDirtyBaseline();
+
+    /** Shared body of saveCurrentPreset()/savePresetAs(): serializes the
+        current apvts state, writes it to `file` as `name`, and updates the
+        current-preset bookkeeping (member vars + apvts.state properties)
+        and dirty baseline on success. */
+    bool writeCurrentStateToPresetFile (const juce::String& name, const juce::File& file, juce::String& outError);
+
     void timerCallback() override;
 
-    // Property names used on apvts.state to persist the loaded model/IR path
-    // and the pedal chain order across getStateInformation/setStateInformation
-    // (DAW session save/load).
+    // Property names used on apvts.state to persist the loaded model/IR path,
+    // the pedal chain order, and the current preset across
+    // getStateInformation/setStateInformation (DAW session save/load).
     static constexpr const char* namModelPathPropertyId = "namModelPath";
     static constexpr const char* irPathPropertyId = "irPath";
     static constexpr const char* chainOrderPropertyId = "chainOrder";
+    static constexpr const char* currentPresetPathPropertyId = "currentPresetPath";
+    static constexpr const char* currentPresetNamePropertyId = "currentPresetName";
 
     /** How often the message-thread latency-refresh timer runs (see class
         comment): only needs to catch on/off toggles, not track anything
-        per-frame, so a low rate is plenty. */
+        per-frame, so a low rate is plenty. Also drives the dirty-tracking
+        poll (pollForDirtyParamChange()) -- same low-rate message-thread
+        cadence, same reasoning. */
     static constexpr int latencyRefreshHz = 15;
 
     //==========================================================================
@@ -269,6 +371,24 @@ private:
     // onto apvts.state properties so they round-trip through getState/setState.
     juce::String currentNamModelPath;
     juce::String currentIrPath;
+
+    // Message-thread-only bookkeeping of the current preset, mirrored onto
+    // apvts.state properties (currentPresetPathPropertyId/NamePropertyId) so
+    // a DAW session remembers which preset it was on.
+    juce::String currentPresetName;
+    juce::String currentPresetPath;
+
+    // Dirty tracking (see the class-level comment). Set true directly at the
+    // model/IR-load and chain-reorder call sites; set true for a plain
+    // param change by pollForDirtyParamChange() diffing against
+    // dirtyBaselineValues. Cleared (along with a fresh baseline snapshot) by
+    // refreshDirtyBaseline() on construction and after every successful
+    // save/load. presetDirty is atomic since WebviewBridge (a different
+    // object, but also message-thread-only) reads it; dirtyBaselineValues is
+    // plain since only this processor's own message-thread code ever
+    // touches it.
+    std::atomic<bool> presetDirty { false };
+    std::array<float, numParams> dirtyBaselineValues {};
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (SimpleGuitarAudioProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SimpleGuitarAudioProcessor)

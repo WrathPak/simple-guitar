@@ -6,9 +6,11 @@ describe("App", () => {
   it("renders the whole rig in one scene with no page scroll", () => {
     const { container } = render(<App />);
 
-    // Chrome: wordmark + preset pill.
+    // Chrome: wordmark + preset pill. No preset has been saved/loaded yet
+    // (dev fallback starts with an empty in-memory preset store), so the
+    // pill reads the dimmed empty-state name.
     expect(screen.getByText("Simple Guitar")).toBeInTheDocument();
-    expect(screen.getByText("Blues Breakup 02")).toBeInTheDocument();
+    expect(screen.getByText("no preset")).toBeInTheDocument();
 
     // Backline: the amp is present (decorative, wide shot).
     expect(screen.getByRole("button", { name: "Focus amplifier" })).toBeInTheDocument();

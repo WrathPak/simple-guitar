@@ -1,3 +1,4 @@
+import { markDevDirty } from "./devDirty";
 import { getJuceBackend, isJuceHost } from "./juceClient";
 import type { ChainOrder, LibraryEntry, LoadResult, PedalId, RigState } from "../../../schema/gen/ts/bridge";
 
@@ -107,7 +108,7 @@ const devLoadResultListeners = new Set<(result: LoadResult) => void>();
 function buildDevRigState(): RigState {
   return {
     type: "rigState",
-    schemaVersion: 2,
+    schemaVersion: 3,
     namModelName: devNamModelName,
     namModelSampleRate: devNamModelName ? DEV_MODEL_SAMPLE_RATE : 0,
     irName: devIrName,
@@ -140,6 +141,7 @@ function devRequestRigState(): void {
 function devSetChainOrder(order: readonly string[]): void {
   if (!isValidChainOrder(order)) return; // silently rejected, same as the engine.
   devChainOrder = order;
+  markDevDirty();
   notifyDevRigState();
 }
 
@@ -157,6 +159,8 @@ function devLoad(kind: "nam" | "ir", path: string): void {
 
     if (kind === "nam") devNamModelName = entry.name;
     else devIrName = entry.name;
+
+    markDevDirty();
 
     const result: LoadResult = { type: "loadResult", kind, ok: true, message: `loaded ${entry.name}` };
     for (const listener of devLoadResultListeners) listener(result);

@@ -6,7 +6,7 @@
  */
 
 /**
- * Simple Guitar C++ <-> React bridge protocol, v2. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
+ * Simple Guitar C++ <-> React bridge protocol, v3. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
  *
  * Union of every message that can cross the bridge in either direction, discriminated by the `type` field.
  */
@@ -14,7 +14,18 @@ export type BridgeMessage = UiToEngineMessage | EngineToUiMessage;
 /**
  * Union of every message the React UI may send to the C++ engine.
  */
-export type UiToEngineMessage = SetParam | LoadNamModel | LoadIr | RequestRigState | SetChainOrder;
+export type UiToEngineMessage =
+  | SetParam
+  | LoadNamModel
+  | LoadIr
+  | RequestRigState
+  | SetChainOrder
+  | LoadPreset
+  | SavePresetAs
+  | SaveCurrentPreset
+  | NextPreset
+  | PrevPreset
+  | RequestPresets;
 /**
  * Identifiers for host-automatable parameters exposed by the engine's APVTS. M1 adds the gate/amp/cab rig params; M2 adds the three floor pedals (screamer/echoes/chamber). New params are added here first.
  */
@@ -61,15 +72,15 @@ export type PedalId = "screamer" | "echoes" | "chamber";
 /**
  * Union of every message the C++ engine may send to the React UI.
  */
-export type EngineToUiMessage = MeterFrame | StateChanged | RigState | LoadResult;
+export type EngineToUiMessage = MeterFrame | StateChanged | RigState | LoadResult | PresetsState | PresetResult;
 /**
  * A signal level expressed in dBFS, as reported by a meter tap. Not clamped in the schema since engines may report -inf for digital silence; consumers should treat very negative / non-finite values as silence.
  */
 export type DecibelValue = number;
 /**
- * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing.
+ * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing. M2 wave 2 bumps 2 -> 3 for the preset message set (loadPreset/savePresetAs/saveCurrentPreset/nextPreset/prevPreset/requestPresets/presetsState/presetResult).
  */
-export type SchemaVersion = 2;
+export type SchemaVersion = 3;
 /**
  * Which loader a loadResult reports on.
  */
@@ -109,6 +120,44 @@ export interface RequestRigState {
 export interface SetChainOrder {
   type: "setChainOrder";
   order: ChainOrder;
+}
+/**
+ * UI -> engine. Load a .sgpreset file. path must be an absolute path inside the managed Presets library folder; the engine rejects anything else. Restores model/IR/chain order/params via the same code path as a DAW session restore. The engine responds with a presetResult followed by a fresh presetsState once the load completes (success or failure).
+ */
+export interface LoadPreset {
+  type: "loadPreset";
+  path: string;
+}
+/**
+ * UI -> engine. Saves the current rig state as a new (or overwritten) preset named `name` and makes it the current preset. The engine sanitizes `name` into a safe filename; an empty/unsanitizable name is rejected. The engine responds with a presetResult (ok:false + a message on failure) followed by a fresh presetsState.
+ */
+export interface SavePresetAs {
+  type: "savePresetAs";
+  name: string;
+}
+/**
+ * UI -> engine. Overwrites the current preset with the current rig state. Fails (presetResult ok:false) if there is no current preset -- the UI should fall back to savePresetAs in that case. The engine responds with a presetResult followed by a fresh presetsState.
+ */
+export interface SaveCurrentPreset {
+  type: "saveCurrentPreset";
+}
+/**
+ * UI -> engine. Loads the next preset (sorted by name) relative to the current one, wrapping around; loads the first preset if none is current. No-op if there are no presets. The engine responds with a fresh presetsState (no presetResult -- the UI has no inline failure surface for this control).
+ */
+export interface NextPreset {
+  type: "nextPreset";
+}
+/**
+ * UI -> engine. Loads the previous preset (sorted by name) relative to the current one, wrapping around; loads the last preset if none is current. No-op if there are no presets. The engine responds with a fresh presetsState (no presetResult).
+ */
+export interface PrevPreset {
+  type: "prevPreset";
+}
+/**
+ * UI -> engine. Ask for a fresh presetsState snapshot, e.g. when the presets overlay mounts. The engine rescans the Presets folder before replying.
+ */
+export interface RequestPresets {
+  type: "requestPresets";
 }
 /**
  * Engine -> UI. A single coalesced metering sample, pushed on a 30-60Hz timer off the audio thread (never per-block). M0 carries just the passthrough in/out peaks; more taps (per-block, tuner, etc.) are added as new fields in later milestones, not new message types.
@@ -164,6 +213,24 @@ export interface LibraryEntry {
 export interface LoadResult {
   type: "loadResult";
   kind: LoadResultKind;
+  ok: boolean;
+  message: string;
+}
+/**
+ * Engine -> UI. Full preset snapshot: the current preset (if any), whether the rig has changed since the last save/load, and the managed Presets library contents (flat, sorted by name). Sent on page load, after any loadPreset/savePresetAs/saveCurrentPreset/nextPreset/prevPreset resolves, in reply to requestPresets, and whenever `dirty` flips (throttled to ~4 emissions/second max so a fast knob drag doesn't flood the bridge).
+ */
+export interface PresetsState {
+  type: "presetsState";
+  schemaVersion: SchemaVersion;
+  current: LibraryEntry | null;
+  dirty: boolean;
+  presets: LibraryEntry[];
+}
+/**
+ * Engine -> UI. Outcome of a loadPreset, savePresetAs, or saveCurrentPreset request (mirrors LoadResult's nam/ir pairing with rigState). message is human-readable (e.g. an error like "name required", or a short confirmation). Always followed by a fresh presetsState.
+ */
+export interface PresetResult {
+  type: "presetResult";
   ok: boolean;
   message: string;
 }

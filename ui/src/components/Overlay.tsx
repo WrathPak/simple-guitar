@@ -18,7 +18,12 @@ export function Overlay({ title, onClose, children }: OverlayProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    panelRef.current?.focus();
+    // Don't steal focus from a descendant that already grabbed it on mount
+    // (e.g. SaveAsOverlay's autofocused name input, whose own mount effect
+    // runs before this one -- child effects fire before parent effects).
+    if (!panelRef.current?.contains(document.activeElement)) {
+      panelRef.current?.focus();
+    }
 
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();

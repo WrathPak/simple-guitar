@@ -87,7 +87,7 @@ describe("Model picker overlay", () => {
     const fake = renderWithFakeBackend();
     fake.trigger("rigState", {
       type: "rigState",
-      schemaVersion: 2,
+      schemaVersion: 3,
       namModelName: null,
       namModelSampleRate: 0,
       irName: null,
@@ -114,7 +114,7 @@ describe("Model picker overlay", () => {
     const fake = renderWithFakeBackend();
     fake.trigger("rigState", {
       type: "rigState",
-      schemaVersion: 2,
+      schemaVersion: 3,
       namModelName: null,
       namModelSampleRate: 0,
       irName: null,
@@ -139,7 +139,7 @@ describe("Cab focus and wiring", () => {
     const fake = renderWithFakeBackend();
     fake.trigger("rigState", {
       type: "rigState",
-      schemaVersion: 2,
+      schemaVersion: 3,
       namModelName: null,
       namModelSampleRate: 0,
       irName: "4x12 V30",
@@ -172,7 +172,7 @@ describe("Cab focus and wiring", () => {
     const fake = renderWithFakeBackend();
     fake.trigger("rigState", {
       type: "rigState",
-      schemaVersion: 2,
+      schemaVersion: 3,
       namModelName: null,
       namModelSampleRate: 0,
       irName: null,
@@ -336,7 +336,7 @@ describe("Chain order <-> bridge round trip", () => {
     act(() => {
       fake.trigger("rigState", {
         type: "rigState",
-        schemaVersion: 2,
+        schemaVersion: 3,
         namModelName: null,
         namModelSampleRate: 0,
         irName: null,

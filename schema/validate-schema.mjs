@@ -32,7 +32,7 @@ async function main() {
     {
       name: "stateChanged (valid)",
       ok: true,
-      data: { type: "stateChanged", schemaVersion: 0, params: { outputGain: 0.75 } },
+      data: { type: "stateChanged", schemaVersion: 3, params: { outputGain: 0.75 } },
     },
     {
       name: "stateChanged (wrong schemaVersion)",

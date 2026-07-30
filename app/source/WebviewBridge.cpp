@@ -56,6 +56,12 @@ juce::WebBrowserComponent::Options WebviewBridge::attachListenersTo (juce::WebBr
     opts = opts.withEventListener (loadIrChannelId, [this] (const juce::var& event) { handleLoadIr (event); });
     opts = opts.withEventListener (requestRigStateChannelId, [this] (const juce::var& event) { handleRequestRigState (event); });
     opts = opts.withEventListener (setChainOrderChannelId, [this] (const juce::var& event) { handleSetChainOrder (event); });
+    opts = opts.withEventListener (loadPresetChannelId, [this] (const juce::var& event) { handleLoadPreset (event); });
+    opts = opts.withEventListener (savePresetAsChannelId, [this] (const juce::var& event) { handleSavePresetAs (event); });
+    opts = opts.withEventListener (saveCurrentPresetChannelId, [this] (const juce::var& event) { handleSaveCurrentPreset (event); });
+    opts = opts.withEventListener (nextPresetChannelId, [this] (const juce::var& event) { handleNextPreset (event); });
+    opts = opts.withEventListener (prevPresetChannelId, [this] (const juce::var& event) { handlePrevPreset (event); });
+    opts = opts.withEventListener (requestPresetsChannelId, [this] (const juce::var& event) { handleRequestPresets (event); });
 
     return opts;
 }
@@ -193,6 +199,61 @@ void WebviewBridge::handleSetChainOrder (const juce::var& event)
     sendRigState();
 }
 
+void WebviewBridge::handleLoadPreset (const juce::var& event)
+{
+    auto* obj = event.getDynamicObject();
+    const auto path = obj != nullptr ? obj->getProperty (pathKey).toString() : juce::String();
+
+    juce::String error;
+    const bool ok = path.isNotEmpty() && processor.loadPreset (path, error);
+
+    if (! ok && error.isEmpty())
+        error = "no path given";
+
+    sendPresetResult (ok, ok ? "loaded" : error);
+    sendPresetsState();
+}
+
+void WebviewBridge::handleSavePresetAs (const juce::var& event)
+{
+    auto* obj = event.getDynamicObject();
+    const auto name = obj != nullptr ? obj->getProperty ("name").toString() : juce::String();
+
+    juce::String error;
+    const bool ok = processor.savePresetAs (name, error);
+
+    sendPresetResult (ok, ok ? "saved" : error);
+    sendPresetsState();
+}
+
+void WebviewBridge::handleSaveCurrentPreset (const juce::var&)
+{
+    juce::String error;
+    const bool ok = processor.saveCurrentPreset (error);
+
+    sendPresetResult (ok, ok ? "saved" : error);
+    sendPresetsState();
+}
+
+void WebviewBridge::handleNextPreset (const juce::var&)
+{
+    juce::String error;
+    processor.nextPreset (error); // best-effort; no inline failure surface for this control.
+    sendPresetsState();
+}
+
+void WebviewBridge::handlePrevPreset (const juce::var&)
+{
+    juce::String error;
+    processor.prevPreset (error);
+    sendPresetsState();
+}
+
+void WebviewBridge::handleRequestPresets (const juce::var&)
+{
+    sendPresetsState();
+}
+
 void WebviewBridge::attachBrowser (juce::WebBrowserComponent* browserToUse)
 {
     browser = browserToUse;
@@ -204,6 +265,7 @@ void WebviewBridge::attachBrowser (juce::WebBrowserComponent* browserToUse)
         pushParamValueToUi (i);
 
     sendRigState();
+    sendPresetsState();
 
     if (! isTimerRunning())
         startTimerHz (meterTimerHz);
@@ -271,6 +333,59 @@ void WebviewBridge::sendLoadResult (const char* kind, bool ok, const juce::Strin
     browser->emitEventIfBrowserIsVisible (loadResultChannelId, obj.get());
 }
 
+void WebviewBridge::sendPresetsState()
+{
+    if (browser == nullptr)
+        return;
+
+    const auto presets = processor.listPresets();
+    juce::Array<juce::var> presetsArray;
+    for (const auto& entry : presets)
+    {
+        juce::DynamicObject::Ptr entryObj (new juce::DynamicObject());
+        entryObj->setProperty ("name", entry.name);
+        entryObj->setProperty ("path", entry.path);
+        presetsArray.add (juce::var (entryObj.get()));
+    }
+
+    juce::var currentVar; // stays void -- serializes as JSON null -- if there's no current preset.
+    if (const auto current = processor.getCurrentPreset())
+    {
+        juce::DynamicObject::Ptr currentObj (new juce::DynamicObject());
+        currentObj->setProperty ("name", current->name);
+        currentObj->setProperty ("path", current->path);
+        currentVar = juce::var (currentObj.get());
+    }
+
+    juce::DynamicObject::Ptr obj (new juce::DynamicObject());
+    obj->setProperty (typeKey, "presetsState");
+    obj->setProperty ("schemaVersion", schemaVersion);
+    obj->setProperty ("current", currentVar);
+    obj->setProperty ("dirty", processor.isPresetDirty());
+    obj->setProperty ("presets", juce::var (presetsArray));
+
+    browser->emitEventIfBrowserIsVisible (presetsStateChannelId, obj.get());
+
+    // Keep the dirty-flip throttle (see timerCallback()) in sync with every
+    // emission, whatever triggered it -- not just the ones the throttle
+    // itself decides to send.
+    lastKnownPresetDirty = processor.isPresetDirty();
+    lastPresetDirtyEmitMs = juce::Time::getMillisecondCounter();
+}
+
+void WebviewBridge::sendPresetResult (bool ok, const juce::String& message)
+{
+    if (browser == nullptr)
+        return;
+
+    juce::DynamicObject::Ptr obj (new juce::DynamicObject());
+    obj->setProperty (typeKey, "presetResult");
+    obj->setProperty ("ok", ok);
+    obj->setProperty ("message", message);
+
+    browser->emitEventIfBrowserIsVisible (presetResultChannelId, obj.get());
+}
+
 void WebviewBridge::timerCallback()
 {
     if (browser == nullptr)
@@ -296,6 +411,20 @@ void WebviewBridge::timerCallback()
             obj->setProperty (valueKey, currentNormalized);
             browser->emitEventIfBrowserIsVisible (SimpleGuitarAudioProcessor::allParamIds[(std::size_t) i], obj.get());
         }
+    }
+
+    // --- Preset dirty-flip: sendPresetsState() is already called directly
+    // after every explicit preset op (see the handle* methods above); this
+    // only needs to catch a *param* change flipping dirty false->true (or,
+    // in principle, some other path clearing it) in between those, at a
+    // throttled rate (~4/s max, see presetDirtyEmitMinIntervalMs) so a fast
+    // knob drag can't flood the bridge with presetsState pushes.
+    {
+        const bool currentDirty = processor.isPresetDirty();
+        const auto now = juce::Time::getMillisecondCounter();
+
+        if (currentDirty != lastKnownPresetDirty && (now - lastPresetDirtyEmitMs) >= presetDirtyEmitMinIntervalMs)
+            sendPresetsState(); // also refreshes lastKnownPresetDirty/lastPresetDirtyEmitMs.
     }
 
     // --- Meter frame.

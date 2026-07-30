@@ -37,3 +37,14 @@ button {
   border: none;
   padding: 0;
 }
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  /* Text fields (e.g. the save-as preset name input) are the one exception
+     to the app-wide user-select:none above -- typing, caret placement, and
+     selecting/editing text need to work normally. */
+  user-select: text;
+  -webkit-user-select: text;
+}

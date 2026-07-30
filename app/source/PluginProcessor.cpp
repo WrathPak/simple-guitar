@@ -1,7 +1,9 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 
 #include <juce_events/juce_events.h>
 
@@ -88,9 +90,14 @@ SimpleGuitarAudioProcessor::SimpleGuitarAudioProcessor()
     chamberMixParam = apvts.getRawParameterValue (chamberMixParamId);
 
     // Message-thread work: make sure the managed library folders exist from
-    // the moment the plugin is instantiated, so the first rigState the UI
-    // asks for already has somewhere to scan.
+    // the moment the plugin is instantiated, so the first rigState/
+    // presetsState the UI asks for already has somewhere to scan.
     sg::ensureLibraryFoldersExist();
+    sg::ensurePresetsFolderExists();
+
+    // Baseline for dirty-tracking (see the class-level comment): freshly
+    // constructed, at the default param values, reads as "not dirty".
+    refreshDirtyBaseline();
 
     startTimerHz (latencyRefreshHz);
 }
@@ -407,6 +414,40 @@ void SimpleGuitarAudioProcessor::timerCallback()
     // host automation) and must instead be a message-thread refresh that
     // works whether or not an editor/WebviewBridge exists.
     updateReportedLatency();
+
+    // Same reasoning drives dirty-tracking's param-change detection: a
+    // low-rate message-thread poll rather than a parameter listener.
+    pollForDirtyParamChange();
+}
+
+void SimpleGuitarAudioProcessor::pollForDirtyParamChange()
+{
+    if (presetDirty.load (std::memory_order_relaxed))
+        return; // already dirty -- nothing to do until the next save/load.
+
+    for (std::size_t i = 0; i < (std::size_t) numParams; ++i)
+    {
+        auto* param = apvts.getParameter (allParamIds[i]);
+        if (param == nullptr)
+            continue;
+
+        if (! juce::approximatelyEqual (param->getValue(), dirtyBaselineValues[i]))
+        {
+            presetDirty.store (true, std::memory_order_relaxed);
+            return;
+        }
+    }
+}
+
+void SimpleGuitarAudioProcessor::refreshDirtyBaseline()
+{
+    for (std::size_t i = 0; i < (std::size_t) numParams; ++i)
+    {
+        if (auto* param = apvts.getParameter (allParamIds[i]))
+            dirtyBaselineValues[i] = param->getValue();
+    }
+
+    presetDirty.store (false, std::memory_order_relaxed);
 }
 
 bool SimpleGuitarAudioProcessor::setChainOrder (const sg::PedalOrder& order)
@@ -415,6 +456,13 @@ bool SimpleGuitarAudioProcessor::setChainOrder (const sg::PedalOrder& order)
         return false;
 
     apvts.state.setProperty (chainOrderPropertyId, chainOrderToString (order), nullptr);
+
+    // setChainOrder() is only ever called from a genuine user-driven
+    // reorder (WebviewBridge::handleSetChainOrder) -- restoring a persisted
+    // order (restoreLoadedPathsFromState()) writes the atomic directly and
+    // never calls this, so there's no restore-vs-user ambiguity to guard
+    // against here, unlike the nam/ir loaders above.
+    presetDirty.store (true, std::memory_order_relaxed);
     return true;
 }
 
@@ -500,9 +548,19 @@ void SimpleGuitarAudioProcessor::changeProgramName (int, const juce::String&)
 
 void SimpleGuitarAudioProcessor::requestLoadNamModel (const juce::String& path, std::function<void (bool, juce::String)> onDone)
 {
+    requestLoadNamModelInternal (path, std::move (onDone), false);
+}
+
+void SimpleGuitarAudioProcessor::requestLoadIr (const juce::String& path, std::function<void (bool, juce::String)> onDone)
+{
+    requestLoadIrInternal (path, std::move (onDone), false);
+}
+
+void SimpleGuitarAudioProcessor::requestLoadNamModelInternal (const juce::String& path, std::function<void (bool, juce::String)> onDone, bool isRestoring)
+{
     juce::WeakReference<SimpleGuitarAudioProcessor> safeThis (this);
 
-    nam.requestLoad (path, [safeThis, path, onDone] (bool ok, juce::String errorOrName)
+    nam.requestLoad (path, [safeThis, path, onDone, isRestoring] (bool ok, juce::String errorOrName)
     {
         if (auto* self = safeThis.get())
         {
@@ -510,6 +568,13 @@ void SimpleGuitarAudioProcessor::requestLoadNamModel (const juce::String& path, 
             {
                 self->currentNamModelPath = path;
                 self->apvts.state.setProperty (namModelPathPropertyId, path, nullptr);
+
+                // Only a genuine user-driven load (via the bridge) dirties
+                // the preset -- restoring to a saved/loaded state must not
+                // immediately mark it dirty again (see the class-level
+                // comment).
+                if (! isRestoring)
+                    self->presetDirty.store (true, std::memory_order_relaxed);
             }
         }
 
@@ -518,11 +583,11 @@ void SimpleGuitarAudioProcessor::requestLoadNamModel (const juce::String& path, 
     });
 }
 
-void SimpleGuitarAudioProcessor::requestLoadIr (const juce::String& path, std::function<void (bool, juce::String)> onDone)
+void SimpleGuitarAudioProcessor::requestLoadIrInternal (const juce::String& path, std::function<void (bool, juce::String)> onDone, bool isRestoring)
 {
     juce::WeakReference<SimpleGuitarAudioProcessor> safeThis (this);
 
-    cab.requestLoad (path, [safeThis, path, onDone] (bool ok, juce::String errorOrName)
+    cab.requestLoad (path, [safeThis, path, onDone, isRestoring] (bool ok, juce::String errorOrName)
     {
         if (auto* self = safeThis.get())
         {
@@ -530,6 +595,9 @@ void SimpleGuitarAudioProcessor::requestLoadIr (const juce::String& path, std::f
             {
                 self->currentIrPath = path;
                 self->apvts.state.setProperty (irPathPropertyId, path, nullptr);
+
+                if (! isRestoring)
+                    self->presetDirty.store (true, std::memory_order_relaxed);
             }
         }
 
@@ -564,7 +632,13 @@ void SimpleGuitarAudioProcessor::setStateInformation (const void* data, int size
     juce::MessageManager::callAsync ([safeThis]
     {
         if (auto* self = safeThis.get())
+        {
             self->restoreLoadedPathsFromState();
+
+            // A freshly-restored DAW session reads as "not dirty" -- it
+            // matches its own saved state by definition.
+            self->refreshDirtyBaseline();
+        }
     });
 }
 
@@ -574,10 +648,10 @@ void SimpleGuitarAudioProcessor::restoreLoadedPathsFromState()
     const auto irPath = apvts.state.getProperty (irPathPropertyId, "").toString();
 
     if (namPath.isNotEmpty() && namPath != currentNamModelPath)
-        requestLoadNamModel (namPath, nullptr);
+        requestLoadNamModelInternal (namPath, nullptr, true);
 
     if (irPath.isNotEmpty() && irPath != currentIrPath)
-        requestLoadIr (irPath, nullptr);
+        requestLoadIrInternal (irPath, nullptr, true);
 
     // Chain order: the state tree already carries the persisted value
     // verbatim (it just came in via apvts.replaceState()), so this only
@@ -589,6 +663,187 @@ void SimpleGuitarAudioProcessor::restoreLoadedPathsFromState()
 
     if (chainOrderText.isNotEmpty() && parseChainOrderString (chainOrderText, restoredOrder))
         sg::storePedalOrder (chainOrderAtomic, restoredOrder);
+
+    // Current preset bookkeeping: plain string properties, no filesystem
+    // access needed to "restore" them (unlike nam/ir, which must re-run the
+    // loader) -- restored here so a DAW session remembers which preset it
+    // was on (chrome preset pill) across project save/reload.
+    currentPresetPath = apvts.state.getProperty (currentPresetPathPropertyId, "").toString();
+    currentPresetName = apvts.state.getProperty (currentPresetNamePropertyId, "").toString();
+}
+
+//==============================================================================
+// Presets. See PresetStore.h for the on-disk format and PluginProcessor.h's
+// class-level comment for the dirty-tracking design.
+
+std::optional<SimpleGuitarAudioProcessor::CurrentPreset> SimpleGuitarAudioProcessor::getCurrentPreset() const
+{
+    if (currentPresetPath.isEmpty())
+        return std::nullopt;
+
+    return CurrentPreset { currentPresetName, currentPresetPath };
+}
+
+bool SimpleGuitarAudioProcessor::writeCurrentStateToPresetFile (const juce::String& name, const juce::File& file, juce::String& outError)
+{
+    const auto state = apvts.copyState();
+    const std::unique_ptr<juce::XmlElement> xml (state.createXml());
+
+    if (xml == nullptr)
+    {
+        outError = "couldn't serialize the current state";
+        return false;
+    }
+
+    sg::ensurePresetsFolderExists();
+
+    if (! sg::writePresetFile (file, name, xml->toString()))
+    {
+        outError = "couldn't write the preset file";
+        return false;
+    }
+
+    currentPresetName = name;
+    currentPresetPath = file.getFullPathName();
+    apvts.state.setProperty (currentPresetPathPropertyId, currentPresetPath, nullptr);
+    apvts.state.setProperty (currentPresetNamePropertyId, currentPresetName, nullptr);
+
+    // Saving clears dirty, same as loading.
+    refreshDirtyBaseline();
+    return true;
+}
+
+bool SimpleGuitarAudioProcessor::saveCurrentPreset (juce::String& outError)
+{
+    if (currentPresetPath.isEmpty())
+    {
+        outError = "no current preset -- use save as";
+        return false;
+    }
+
+    return writeCurrentStateToPresetFile (currentPresetName, juce::File (currentPresetPath), outError);
+}
+
+bool SimpleGuitarAudioProcessor::savePresetAs (const juce::String& rawName, juce::String& outError)
+{
+    const auto sanitized = sg::sanitizePresetFilename (rawName);
+
+    if (sanitized.isEmpty())
+    {
+        outError = "name required";
+        return false;
+    }
+
+    sg::ensurePresetsFolderExists();
+    const auto file = sg::getPresetsLibraryFolder().getChildFile (sanitized + ".sgpreset");
+
+    // Overwrite-if-a-preset-with-that-name-already-exists is intentional
+    // (see PresetStore.h / PluginProcessor.h) -- writeCurrentStateToPresetFile
+    // doesn't distinguish "new file" from "overwrite".
+    return writeCurrentStateToPresetFile (rawName.trim(), file, outError);
+}
+
+bool SimpleGuitarAudioProcessor::loadPreset (const juce::String& path, juce::String& outError)
+{
+    const juce::File file (path);
+
+    if (! sg::isInsidePresetsFolder (file))
+    {
+        outError = "path is outside the managed Presets folder";
+        return false;
+    }
+
+    sg::PresetFileContents contents;
+
+    if (! sg::readPresetFile (file, contents))
+    {
+        outError = "couldn't read preset (missing, corrupt, or wrong format)";
+        return false;
+    }
+
+    const std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (contents.stateXmlText));
+
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+    {
+        outError = "preset's saved state is corrupt";
+        return false;
+    }
+
+    // Same restore path setStateInformation uses (apvts.replaceState() +
+    // restoreLoadedPathsFromState()), called directly/synchronously rather
+    // than marshaled via MessageManager::callAsync -- loadPreset() is
+    // documented message-thread-only (unlike setStateInformation, which the
+    // host may call from any thread), so there's no cross-thread hazard to
+    // guard against here, and a synchronous restore means the presetsState
+    // WebviewBridge sends right after this returns is already accurate.
+    apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    restoreLoadedPathsFromState();
+
+    // Restoring this preset's own saved paths above just set
+    // currentPresetPath/Name back from whatever the *previous* current
+    // preset's properties were (or empty, carried over inside the loaded
+    // state) -- overwrite with the preset actually being loaded now.
+    currentPresetName = contents.name;
+    currentPresetPath = file.getFullPathName();
+    apvts.state.setProperty (currentPresetPathPropertyId, currentPresetPath, nullptr);
+    apvts.state.setProperty (currentPresetNamePropertyId, currentPresetName, nullptr);
+
+    // Loading clears dirty, same as saving.
+    refreshDirtyBaseline();
+    return true;
+}
+
+bool SimpleGuitarAudioProcessor::nextPreset (juce::String& outError)
+{
+    const auto presets = sg::scanPresets();
+
+    if (presets.empty())
+    {
+        outError = "no presets";
+        return false;
+    }
+
+    std::size_t targetIndex = 0;
+
+    if (currentPresetPath.isNotEmpty())
+    {
+        const auto it = std::find_if (presets.begin(), presets.end(),
+            [this] (const sg::PresetEntry& e) { return e.path == currentPresetPath; });
+
+        if (it != presets.end())
+            targetIndex = ((std::size_t) std::distance (presets.begin(), it) + 1) % presets.size();
+        // else: current preset no longer exists on disk -- fall back to the first.
+    }
+
+    return loadPreset (presets[targetIndex].path, outError);
+}
+
+bool SimpleGuitarAudioProcessor::prevPreset (juce::String& outError)
+{
+    const auto presets = sg::scanPresets();
+
+    if (presets.empty())
+    {
+        outError = "no presets";
+        return false;
+    }
+
+    std::size_t targetIndex = presets.size() - 1;
+
+    if (currentPresetPath.isNotEmpty())
+    {
+        const auto it = std::find_if (presets.begin(), presets.end(),
+            [this] (const sg::PresetEntry& e) { return e.path == currentPresetPath; });
+
+        if (it != presets.end())
+        {
+            const auto index = (std::size_t) std::distance (presets.begin(), it);
+            targetIndex = (index == 0) ? presets.size() - 1 : index - 1;
+        }
+        // else: current preset no longer exists on disk -- fall back to the last.
+    }
+
+    return loadPreset (presets[targetIndex].path, outError);
 }
 
 // This creates new instances of the plugin.

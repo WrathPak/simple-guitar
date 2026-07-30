@@ -1,3 +1,4 @@
+import { markDevDirty } from "./devDirty";
 import { getJuceBackend, isJuceHost } from "./juceClient";
 import type { SliderStateHandle } from "./types";
 
@@ -51,6 +52,7 @@ function getDevSliderState(name: string, initialValue: number): SliderStateHandl
     },
     setValue(next: number) {
       devValues.set(name, clamp01(next));
+      markDevDirty();
       notify();
     },
     beginGesture() {

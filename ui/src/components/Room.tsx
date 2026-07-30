@@ -2,15 +2,25 @@ import { useEffect, useRef, useState } from "react";
 import {
   sendLoadIr,
   sendLoadNamModel,
+  sendLoadPreset,
+  sendNextPreset,
+  sendPrevPreset,
+  sendRequestPresets,
   sendRequestRigState,
+  sendSaveCurrentPreset,
+  sendSavePresetAs,
   sendSetChainOrder,
   subscribeLoadResult,
   subscribeMeterFrame,
+  subscribePresetResult,
+  subscribePresetsState,
   subscribeRigState,
   useParam,
   type LoadResult,
   type MeterFrame,
   type ParamHandle,
+  type PresetResult,
+  type PresetsState,
   type RigState,
 } from "../bridge";
 import { AmpDevice } from "./AmpDevice";
@@ -32,7 +42,9 @@ import {
 import { PEDAL_DEFS_BY_ID, type PedalDef } from "./pedalDefs";
 import { PedalDevice } from "./PedalDevice";
 import { PedalRow, type PedalRowState } from "./PedalRow";
+import { PresetsOverlay } from "./PresetsOverlay";
 import "./Room.css";
+import { SaveAsOverlay } from "./SaveAsOverlay";
 
 const OUTPUT_DEFAULT_VALUE = 0.75;
 const CAB_LOW_CUT_DEFAULT = defaultNormalizedForLogHz(CAB_LOW_CUT_RANGE);
@@ -44,12 +56,20 @@ const DEFAULT_CHAIN_ORDER = ["screamer", "echoes", "chamber"];
 
 const EMPTY_RIG_STATE: RigState = {
   type: "rigState",
-  schemaVersion: 2,
+  schemaVersion: 3,
   namModelName: null,
   namModelSampleRate: 0,
   irName: null,
   chainOrder: DEFAULT_CHAIN_ORDER as RigState["chainOrder"],
   library: { models: [], irs: [] },
+};
+
+const EMPTY_PRESETS_STATE: PresetsState = {
+  type: "presetsState",
+  schemaVersion: 3,
+  current: null,
+  dirty: false,
+  presets: [],
 };
 
 const WIDE_HINT = "Click gear to focus · drag pedals to reorder · footswitch = bypass";
@@ -63,7 +83,7 @@ const IR_LIBRARY_EMPTY_COPY = "no irs found — drop .wav/.aiff files in Documen
 type FocusTarget = "amp" | "cab" | string | null;
 
 /** Which full-window overlay (if any) is open. Independent of camera focus. */
-type OverlayKind = "model" | "ir" | "gate" | null;
+type OverlayKind = "model" | "ir" | "gate" | "presets" | "saveAs" | null;
 
 /** The whole cinematic scene: one room, the rig in it, and the chrome around it. */
 export function Room() {
@@ -109,6 +129,8 @@ export function Room() {
 
   const [rigState, setRigState] = useState<RigState>(EMPTY_RIG_STATE);
   const [loadResult, setLoadResult] = useState<LoadResult | null>(null);
+  const [presetsState, setPresetsState] = useState<PresetsState>(EMPTY_PRESETS_STATE);
+  const [presetResult, setPresetResult] = useState<PresetResult | null>(null);
   const [overlayKind, setOverlayKind] = useState<OverlayKind>(null);
 
   const [inMeter, setInMeter] = useState({ peakDb: METER_MIN_DB, holdDb: METER_MIN_DB });
@@ -137,6 +159,8 @@ export function Room() {
 
   useEffect(() => subscribeRigState(setRigState), []);
   useEffect(() => subscribeLoadResult(setLoadResult), []);
+  useEffect(() => subscribePresetsState(setPresetsState), []);
+  useEffect(() => subscribePresetResult(setPresetResult), []);
 
   useEffect(() => {
     return subscribeMeterFrame((frame: MeterFrame) => {
@@ -144,6 +168,20 @@ export function Room() {
       setOutMeter((prev) => ({ peakDb: frame.outPeakDb, holdDb: nextPeakHold(prev.holdDb, frame.outPeakDb) }));
     });
   }, []);
+
+  // The one global keyboard shortcut in the app -- ctrl/cmd+S saves. Saves
+  // over the current preset if there is one; opens the save-as overlay
+  // otherwise.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "s") return;
+      e.preventDefault();
+      if (presetsState.current !== null) sendSaveCurrentPreset();
+      else setOverlayKind("saveAs");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [presetsState.current]);
 
   useEffect(() => {
     if (focus === null) return;
@@ -270,10 +308,34 @@ export function Room() {
         />
       )}
       {overlayKind === "gate" && <GateOverlay gateOn={gateOn} gateThreshold={gateThresholdDb} onClose={closeOverlay} />}
+      {overlayKind === "presets" && (
+        <PresetsOverlay
+          presets={presetsState.presets}
+          currentPath={presetsState.current?.path ?? null}
+          presetResult={presetResult}
+          onSelect={sendLoadPreset}
+          onClose={closeOverlay}
+          onOpen={sendRequestPresets}
+        />
+      )}
+      {overlayKind === "saveAs" && (
+        <SaveAsOverlay
+          initialName={presetsState.current?.name ?? ""}
+          presetResult={presetResult}
+          onSave={sendSavePresetAs}
+          onClose={closeOverlay}
+        />
+      )}
 
       <Chrome
-        presetName="Blues Breakup 02"
-        unsaved
+        presetName={presetsState.current?.name ?? null}
+        dirty={presetsState.dirty}
+        hasPresets={presetsState.presets.length > 0}
+        onPrevPreset={sendPrevPreset}
+        onNextPreset={sendNextPreset}
+        onOpenPresets={() => setOverlayKind("presets")}
+        onSave={() => (presetsState.current !== null ? sendSaveCurrentPreset() : setOverlayKind("saveAs"))}
+        onOpenSaveAs={() => setOverlayKind("saveAs")}
         inputMeter={inMeter}
         outputMeter={outMeter}
         hint={hint}

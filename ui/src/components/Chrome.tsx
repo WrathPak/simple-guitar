@@ -8,8 +8,20 @@ export interface MeterReadout {
 }
 
 export interface ChromeProps {
-  presetName: string;
-  unsaved: boolean;
+  /** Current preset's display name, or null -- rendered as dimmed "no preset". */
+  presetName: string | null;
+  /** Amber dot -- only ever shown while dirty. */
+  dirty: boolean;
+  /** Disables ‹ › -- there's nothing to step to when the Presets library is empty. */
+  hasPresets: boolean;
+  onPrevPreset: () => void;
+  onNextPreset: () => void;
+  /** Click the pill name -- opens the presets browser overlay. */
+  onOpenPresets: () => void;
+  /** The pill's small "save" action: saves the current preset, or opens save-as if there is none. */
+  onSave: () => void;
+  /** ⋯ menu "Save as" -- always opens the save-as overlay, current preset or not. */
+  onOpenSaveAs: () => void;
   inputMeter: MeterReadout;
   outputMeter: MeterReadout;
   hint: string;
@@ -19,11 +31,25 @@ export interface ChromeProps {
   onSelectGate?: () => void;
 }
 
-// Presets/Library/Settings/Tuner are display-only placeholders for now (no menu action wired yet).
-const STATIC_MENU_ITEMS = ["Presets", "Library", "Settings", "Tuner"];
+// Library/Settings/Tuner are display-only placeholders for now (no menu action wired yet).
+const STATIC_MENU_ITEMS = ["Library", "Settings", "Tuner"];
 
 /** The three chrome whispers: wordmark, preset pill + menu, edge meters, hint line. */
-export function Chrome({ presetName, unsaved, inputMeter, outputMeter, hint, contextual, onSelectGate }: ChromeProps) {
+export function Chrome({
+  presetName,
+  dirty,
+  hasPresets,
+  onPrevPreset,
+  onNextPreset,
+  onOpenPresets,
+  onSave,
+  onOpenSaveAs,
+  inputMeter,
+  outputMeter,
+  hint,
+  contextual,
+  onSelectGate,
+}: ChromeProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -32,8 +58,21 @@ export function Chrome({ presetName, unsaved, inputMeter, outputMeter, hint, con
 
       <div className="chrome-presetpill">
         <div className="chrome-pill">
-          <span className="chrome-pill-name">{presetName}</span>
-          {unsaved && <span className="chrome-pill-dot" aria-hidden="true" />}
+          <button type="button" className="chrome-pill-nav" aria-label="Previous preset" disabled={!hasPresets} onClick={onPrevPreset}>
+            ‹
+          </button>
+          <button type="button" className="chrome-pill-name-btn" onClick={onOpenPresets}>
+            <span className={`chrome-pill-name${presetName === null ? " chrome-pill-name--empty" : ""}`}>
+              {presetName ?? "no preset"}
+            </span>
+            {dirty && <span className="chrome-pill-dot" aria-hidden="true" />}
+          </button>
+          <button type="button" className="chrome-pill-nav" aria-label="Next preset" disabled={!hasPresets} onClick={onNextPreset}>
+            ›
+          </button>
+          <button type="button" className="chrome-pill-save" aria-label="Save preset" onClick={onSave}>
+            save
+          </button>
         </div>
         <button
           type="button"
@@ -49,6 +88,28 @@ export function Chrome({ presetName, unsaved, inputMeter, outputMeter, hint, con
           <>
             <button type="button" className="chrome-menu-scrim" aria-label="Close menu" onClick={() => setMenuOpen(false)} />
             <div className="chrome-menu" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                className="chrome-menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onOpenPresets();
+                }}
+              >
+                Presets
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="chrome-menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onOpenSaveAs();
+                }}
+              >
+                Save as
+              </button>
               {STATIC_MENU_ITEMS.map((item) => (
                 <button key={item} type="button" role="menuitem" className="chrome-menu-item">
                   {item}

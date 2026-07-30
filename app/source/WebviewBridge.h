@@ -61,6 +61,31 @@
          and in reply to "requestRigState". Rescans the library folders each
          time.
 
+    Presets (see app/source/PresetStore.h for the on-disk format and
+    PluginProcessor.h for the manager itself):
+
+    JS -> native, channel "loadPreset":         { type: "loadPreset", path: string }
+    JS -> native, channel "savePresetAs":       { type: "savePresetAs", name: string }
+    JS -> native, channel "saveCurrentPreset":  { type: "saveCurrentPreset" }
+    JS -> native, channel "nextPreset":         { type: "nextPreset" }
+    JS -> native, channel "prevPreset":         { type: "prevPreset" }
+    JS -> native, channel "requestPresets":     { type: "requestPresets" }
+
+    native -> JS, channel "presetResult":
+      { type: "presetResult", ok: boolean, message: string }
+      -- sent once a loadPreset/savePresetAs/saveCurrentPreset request (valid
+         or rejected) has been resolved; always followed by a fresh
+         "presetsState". Not sent for nextPreset/prevPreset/requestPresets
+         (no inline failure surface for those in the UI).
+
+    native -> JS, channel "presetsState":
+      { type: "presetsState", schemaVersion, current: {name,path}|null,
+        dirty: boolean, presets: [{name,path}] }
+      -- sent on page load, after any preset op resolves, in reply to
+         "requestPresets", and whenever `dirty` flips (throttled to ~4/s max
+         so a fast knob drag doesn't flood the bridge). Rescans the Presets
+         folder each time.
+
     See schema/bridge.schema.json for the authoritative message shapes.
 */
 class WebviewBridge final : private juce::Timer
@@ -76,10 +101,18 @@ public:
     static constexpr const char* setChainOrderChannelId = "setChainOrder";
     static constexpr const char* rigStateChannelId = "rigState";
     static constexpr const char* loadResultChannelId = "loadResult";
+    static constexpr const char* loadPresetChannelId = "loadPreset";
+    static constexpr const char* savePresetAsChannelId = "savePresetAs";
+    static constexpr const char* saveCurrentPresetChannelId = "saveCurrentPreset";
+    static constexpr const char* nextPresetChannelId = "nextPreset";
+    static constexpr const char* prevPresetChannelId = "prevPreset";
+    static constexpr const char* requestPresetsChannelId = "requestPresets";
+    static constexpr const char* presetsStateChannelId = "presetsState";
+    static constexpr const char* presetResultChannelId = "presetResult";
 
-    /** Bridge protocol version, carried on every rigState message (see
-        schema/bridge.schema.json SchemaVersion). */
-    static constexpr int schemaVersion = 2;
+    /** Bridge protocol version, carried on every rigState/presetsState
+        message (see schema/bridge.schema.json SchemaVersion). */
+    static constexpr int schemaVersion = 3;
 
     /** Registers the valueChanged/gestureStart/gestureEnd listener for every
         param channel plus the loadNamModel/loadIr/requestRigState command
@@ -99,10 +132,18 @@ private:
     void handleLoadIr (const juce::var& event);
     void handleRequestRigState (const juce::var& event);
     void handleSetChainOrder (const juce::var& event);
+    void handleLoadPreset (const juce::var& event);
+    void handleSavePresetAs (const juce::var& event);
+    void handleSaveCurrentPreset (const juce::var& event);
+    void handleNextPreset (const juce::var& event);
+    void handlePrevPreset (const juce::var& event);
+    void handleRequestPresets (const juce::var& event);
 
     void pushParamValueToUi (int paramIndex);
     void sendRigState();
     void sendLoadResult (const char* kind, bool ok, const juce::String& message);
+    void sendPresetsState();
+    void sendPresetResult (bool ok, const juce::String& message);
 
     void timerCallback() override;
 
@@ -116,6 +157,13 @@ private:
     // because we just sent it, or the UI just told us). Used to suppress
     // redundant automation-echo events and avoid a feedback loop.
     std::array<std::atomic<float>, SimpleGuitarAudioProcessor::numParams> lastKnownUiValue;
+
+    // Dirty-flip throttle for presetsState (see class comment on the
+    // "presetsState" channel above): sendPresetsState() itself refreshes
+    // both of these on every call, whatever the caller.
+    bool lastKnownPresetDirty = false;
+    juce::uint32 lastPresetDirtyEmitMs = 0;
+    static constexpr juce::uint32 presetDirtyEmitMinIntervalMs = 250; // ~4/s max
 
     static constexpr float meterFloorDb = -60.0f;
     static constexpr int meterTimerHz = 30;

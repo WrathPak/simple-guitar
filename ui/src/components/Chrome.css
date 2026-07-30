@@ -30,10 +30,40 @@
   padding: 7px 15px;
 }
 
+.chrome-pill-nav {
+  color: var(--text-mid);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 3px;
+  cursor: pointer;
+}
+
+.chrome-pill-nav:hover:not(:disabled),
+.chrome-pill-nav:focus-visible:not(:disabled) {
+  color: var(--text-hi);
+  outline: none;
+}
+
+.chrome-pill-nav:disabled {
+  color: #333338;
+  cursor: default;
+}
+
+.chrome-pill-name-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
 .chrome-pill-name {
   font-size: var(--preset-size);
   font-weight: var(--preset-weight);
   color: #d8d8dd;
+}
+
+.chrome-pill-name--empty {
+  color: var(--text-low);
 }
 
 .chrome-pill-dot {
@@ -41,6 +71,22 @@
   height: 5px;
   border-radius: 50%;
   background: var(--state-unsaved);
+}
+
+.chrome-pill-save {
+  color: var(--text-mid);
+  font-size: var(--min-text-size);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 4px 2px 4px 8px;
+  border-left: 1px solid #222228;
+  cursor: pointer;
+}
+
+.chrome-pill-save:hover,
+.chrome-pill-save:focus-visible {
+  color: var(--text-hi);
+  outline: none;
 }
 
 .chrome-menu-btn {
