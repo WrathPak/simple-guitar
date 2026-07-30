@@ -45,17 +45,32 @@ add_custom_command(
     VERBATIM
 )
 
+# -E chdir (rather than WORKING_DIRECTORY) so a missing ui/dist fails the build
+# loudly instead of silently producing no zip.
 add_custom_command(
     OUTPUT "${SG_UI_ZIP}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/webview"
-    COMMAND "${CMAKE_COMMAND}" -E tar "cf" "${SG_UI_ZIP}" --format=zip .
-    WORKING_DIRECTORY "${SG_UI_DIST_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${SG_UI_DIST_DIR}"
+            "${CMAKE_COMMAND}" -E tar "cf" "${SG_UI_ZIP}" --format=zip .
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     DEPENDS "${SG_UI_DIST_STAMP}"
     COMMENT "ui: zipping ui/dist -> ${SG_UI_ZIP}"
     VERBATIM
 )
 
 juce_add_binary_data(SimpleGuitarUiData SOURCES "${SG_UI_ZIP}")
+
+# Strict ordering. The Visual Studio generator does not reliably serialize
+# chained custom commands that land in the same project (they can run out of
+# order or in parallel on a clean one-shot build, so the zip step can race
+# vite's dist clean, and the BinaryData generation can run before the zip
+# exists). Giving each custom command its own target and chaining them with
+# add_dependencies forces project-level ordering, which MSBuild does honor:
+#   sg_ui_build (npm run build) -> sg_ui_bundle (zip) -> SimpleGuitarUiData.
+add_custom_target(sg_ui_build DEPENDS "${SG_UI_DIST_STAMP}")
+add_custom_target(sg_ui_bundle DEPENDS "${SG_UI_ZIP}")
+add_dependencies(sg_ui_bundle sg_ui_build)
+add_dependencies(SimpleGuitarUiData sg_ui_bundle)
 
 juce_add_plugin(SimpleGuitar
     COMPANY_NAME                "Simple Guitar"
