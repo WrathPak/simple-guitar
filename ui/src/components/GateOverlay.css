@@ -1,0 +1,34 @@
+.gate-overlay-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 10px 12px 14px;
+}
+
+.gate-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.gate-toggle-led {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #2c2c31;
+}
+
+.gate-toggle[aria-pressed="true"] .gate-toggle-led {
+  background: radial-gradient(circle at 40% 35%, #f2f2f5, var(--family-dynamics-led) 60%, #9a9aa2 100%);
+  box-shadow: 0 0 8px rgba(242, 242, 245, 0.8);
+}
+
+.gate-toggle-label {
+  font-size: var(--label-size);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--text-mid);
+}

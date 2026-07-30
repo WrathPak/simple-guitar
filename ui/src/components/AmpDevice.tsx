@@ -1,38 +1,55 @@
 import type { CSSProperties } from "react";
+import type { ParamHandle } from "../bridge";
 import "./AmpDevice.css";
 import { Knob } from "./Knob";
-import { angleToValue } from "./knobMath";
+import { AMP_DB_DEFAULT_NORMALIZED, AMP_DB_RANGE, OUTPUT_GAIN_DEFAULT_NORMALIZED, OUTPUT_GAIN_RANGE, formatDb } from "./paramMath";
 
 // Wide-shot decorative knob rotations (non-interactive, purely visual).
 const WIDE_KNOB_ANGLES = [-30, 10, -15, 40];
 
-// Focused faceplate knobs, in order. Output is bridge-wired; the rest are
-// local-state-only stubs seeded from the same rotations shown in the wide shot.
-const FOCUSED_KNOBS = [
-  { label: "Input", angle: -30 },
-  { label: "Bass", angle: 10 },
-  { label: "Mid", angle: -15 },
-  { label: "Treble", angle: 40 },
-  { label: "Presence", angle: 25 },
+export interface AmpKnobs {
+  input: ParamHandle;
+  bass: ParamHandle;
+  mid: ParamHandle;
+  treble: ParamHandle;
+  presence: ParamHandle;
+  output: ParamHandle;
+}
+
+const EQ_KNOB_DEFS: { key: keyof Omit<AmpKnobs, "output">; label: string }[] = [
+  { key: "input", label: "Input" },
+  { key: "bass", label: "Bass" },
+  { key: "mid", label: "Mid" },
+  { key: "treble", label: "Treble" },
+  { key: "presence", label: "Presence" },
 ];
 
 export interface AmpDeviceProps {
   focused: boolean;
-  /** Only used when focused: the OUTPUT knob is the one bridge-wired control. */
-  outputValue?: number;
-  onOutputChange?: (value: number) => void;
+  /** rigState.namModelName -- null renders a dimmed "no model". Only shown when focused isn't required: the wide plate reads it too. */
+  namModelName?: string | null;
+  /** Only used when focused. */
+  normalizeOn?: boolean;
+  onToggleNormalize?: () => void;
+  onOpenModelOverlay?: () => void;
+  knobs?: AmpKnobs;
   onFocus?: () => void;
 }
 
-function formatGainDb(value: number): string {
-  const db = -60 + value * 66;
-  return `${db >= 0 ? "+" : ""}${db.toFixed(1)} dB`;
-}
-
 /** NAM amp faceplate: decorative in the wide shot, fully interactive when focused. */
-export function AmpDevice({ focused, outputValue = 0.75, onOutputChange, onFocus }: AmpDeviceProps) {
+export function AmpDevice({
+  focused,
+  namModelName = null,
+  normalizeOn = false,
+  onToggleNormalize,
+  onOpenModelOverlay,
+  knobs,
+  onFocus,
+}: AmpDeviceProps) {
   const grille = <div className="amp-grille" />;
   const lamp = <div className="amp-lamp" />;
+  const modelLabel = namModelName ?? "no model";
+  const modelClass = `amp-id-model${namModelName ? "" : " amp-id-model--dim"}`;
 
   if (!focused) {
     return (
@@ -41,7 +58,7 @@ export function AmpDevice({ focused, outputValue = 0.75, onOutputChange, onFocus
         <div className="amp-plate">
           <div className="amp-id">
             <div className="amp-id-mark">NAM</div>
-            <div className="amp-id-model">MARK IIC+</div>
+            <div className={modelClass}>{modelLabel}</div>
           </div>
           <div className="amp-deco-knobs">
             {WIDE_KNOB_ANGLES.map((angle, i) => (
@@ -60,24 +77,39 @@ export function AmpDevice({ focused, outputValue = 0.75, onOutputChange, onFocus
       <div className="amp-plate">
         <div className="amp-id">
           <div className="amp-id-mark">NAM · Amplifier</div>
-          <div className="amp-id-model">MARK IIC+</div>
-          <button type="button" className="amp-id-change">
+          <div className={modelClass}>{modelLabel}</div>
+          <button type="button" className="amp-id-change" onClick={onOpenModelOverlay}>
             change model ▾
           </button>
         </div>
         <div className="amp-knobs">
-          {FOCUSED_KNOBS.map(({ label, angle }) => (
-            <Knob key={label} size={58} label={label} defaultValue={angleToValue(angle)} />
-          ))}
-          <Knob
-            size={58}
-            label="Output"
-            value={outputValue}
-            defaultValue={0.75}
-            format={formatGainDb}
-            onChange={onOutputChange}
-          />
+          {knobs &&
+            EQ_KNOB_DEFS.map(({ key, label }) => (
+              <Knob
+                key={label}
+                size={58}
+                label={label}
+                value={knobs[key].value}
+                defaultValue={AMP_DB_DEFAULT_NORMALIZED}
+                format={(v) => formatDb(v, AMP_DB_RANGE)}
+                onChange={knobs[key].setValue}
+              />
+            ))}
+          {knobs && (
+            <Knob
+              size={58}
+              label="Output"
+              value={knobs.output.value}
+              defaultValue={OUTPUT_GAIN_DEFAULT_NORMALIZED}
+              format={(v) => formatDb(v, OUTPUT_GAIN_RANGE)}
+              onChange={knobs.output.setValue}
+            />
+          )}
         </div>
+        <button type="button" className="amp-normalize" aria-pressed={normalizeOn} onClick={onToggleNormalize}>
+          <span className="amp-normalize-led" aria-hidden="true" />
+          <span className="amp-normalize-label">Normalize</span>
+        </button>
         {lamp}
       </div>
     </div>

@@ -1,0 +1,55 @@
+.library-overlay-empty {
+  padding: 22px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-mid);
+  text-align: center;
+}
+
+.library-overlay-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.library-overlay-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text-hi);
+  cursor: pointer;
+}
+
+.library-overlay-row:hover,
+.library-overlay-row:focus-visible {
+  background: #1e1e22;
+  outline: none;
+}
+
+.library-overlay-row:disabled {
+  cursor: default;
+  color: var(--text-mid);
+}
+
+.library-overlay-row-status {
+  font-size: var(--min-text-size);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-mid);
+  flex: none;
+}
+
+.library-overlay-error {
+  margin: 8px 4px 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(207, 83, 64, 0.12);
+  color: #e2a49a;
+  font-size: 12px;
+  line-height: 1.4;
+}

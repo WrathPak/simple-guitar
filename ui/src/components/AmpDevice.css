@@ -73,6 +73,12 @@ button.amp-head--wide {
   text-shadow: var(--plate-text-shadow);
 }
 
+.amp-id-model--dim {
+  color: var(--plate-label-color);
+  opacity: 0.6;
+  text-shadow: none;
+}
+
 .amp-id-change {
   display: block;
   margin-top: 3px;
@@ -115,6 +121,35 @@ button.amp-head--wide {
 .amp-knobs {
   display: flex;
   gap: 26px;
+}
+
+.amp-normalize {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.amp-normalize-led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.18);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.amp-normalize[aria-pressed="true"] .amp-normalize-led {
+  background: radial-gradient(circle at 40% 35%, #ffe9b0, var(--family-amp-lamp-a) 60%, var(--family-amp-lamp-b) 100%);
+  box-shadow: 0 0 8px rgba(230, 150, 60, 0.75);
+}
+
+.amp-normalize-label {
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--plate-label-color);
 }
 
 .amp-lamp {

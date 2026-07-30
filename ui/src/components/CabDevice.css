@@ -1,0 +1,131 @@
+.cab {
+  --cw: calc(520px * 1.06);
+  position: relative;
+  width: var(--cw);
+  border-radius: 10px;
+  padding: 12px;
+  margin-top: 10px;
+  background: repeating-linear-gradient(25deg, rgba(255, 255, 255, 0.014) 0 2px, transparent 2px 4px), linear-gradient(180deg, #202024, #141417);
+  box-shadow: 0 24px 44px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  transition: filter var(--camera-duration) var(--camera-ease);
+  text-align: left;
+  cursor: default;
+}
+
+button.cab--wide {
+  cursor: pointer;
+}
+
+.cab--focused {
+  --cw: 620px;
+  padding: 16px;
+}
+
+/* Off: same "shell desaturated + dimmed, LED dark" convention as pedal bypass. */
+.cab--off {
+  filter: saturate(0.35) brightness(0.72);
+}
+
+.cab-cloth {
+  border-radius: 6px;
+  height: calc(var(--cw) * 0.42);
+  position: relative;
+  overflow: hidden;
+  background: repeating-linear-gradient(45deg, #2a2822 0 3px, #1e1d18 3px 6px), repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.05) 0 3px, transparent 3px 6px), #211f1a;
+  box-shadow: inset 0 4px 14px rgba(0, 0, 0, 0.75);
+}
+
+.cab-badge {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: #cfc9ba;
+  font-weight: 600;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* Geometry-only: where the last pedal's cable ends (see Backline.css for the full rationale). */
+.cab-cable-anchor {
+  position: absolute;
+  bottom: 10px;
+  left: 55%;
+  width: 1px;
+  height: 1px;
+}
+
+.cab-plate {
+  margin-top: 8px;
+  border-radius: 6px;
+  padding: 14px 18px 12px;
+  background: rgba(10, 10, 12, 0.82);
+  box-shadow: inset 0 2px 7px rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.cab-id-mark {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--text-low);
+  text-transform: uppercase;
+}
+
+.cab-id-name {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-hi);
+  margin-top: 3px;
+}
+
+.cab-id-name--dim {
+  color: var(--text-mid);
+  opacity: 0.7;
+}
+
+.cab-id-change {
+  display: block;
+  margin-top: 4px;
+  font-size: 9px;
+  letter-spacing: 0.11em;
+  color: var(--text-mid);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.cab-knobs {
+  display: flex;
+  gap: 22px;
+}
+
+.cab-power {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.cab-power-led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2c2c31;
+}
+
+.cab-power[aria-pressed="true"] .cab-power-led {
+  background: radial-gradient(circle at 40% 35%, #d4ffe0, var(--family-utility-led) 60%, #1c5f36 100%);
+  box-shadow: 0 0 8px rgba(63, 174, 98, 0.8);
+}
+
+.cab-power-label {
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-low);
+}

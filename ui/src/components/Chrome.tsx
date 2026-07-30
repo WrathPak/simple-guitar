@@ -15,12 +15,15 @@ export interface ChromeProps {
   hint: string;
   /** Contextual line above the hint, shown only while a relevant device is focused. */
   contextual?: string;
+  /** Opens the gate overlay -- gate is rack processing behind this menu, not a pedal on the floor. */
+  onSelectGate?: () => void;
 }
 
-const MENU_ITEMS = ["Presets", "Library", "Settings", "Tuner"];
+// Presets/Library/Settings/Tuner are display-only placeholders for now (no menu action wired yet).
+const STATIC_MENU_ITEMS = ["Presets", "Library", "Settings", "Tuner"];
 
 /** The three chrome whispers: wordmark, preset pill + menu, edge meters, hint line. */
-export function Chrome({ presetName, unsaved, inputMeter, outputMeter, hint, contextual }: ChromeProps) {
+export function Chrome({ presetName, unsaved, inputMeter, outputMeter, hint, contextual, onSelectGate }: ChromeProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -46,11 +49,22 @@ export function Chrome({ presetName, unsaved, inputMeter, outputMeter, hint, con
           <>
             <button type="button" className="chrome-menu-scrim" aria-label="Close menu" onClick={() => setMenuOpen(false)} />
             <div className="chrome-menu" role="menu">
-              {MENU_ITEMS.map((item) => (
+              {STATIC_MENU_ITEMS.map((item) => (
                 <button key={item} type="button" role="menuitem" className="chrome-menu-item">
                   {item}
                 </button>
               ))}
+              <button
+                type="button"
+                role="menuitem"
+                className="chrome-menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onSelectGate?.();
+                }}
+              >
+                Gate
+              </button>
             </div>
           </>
         )}
