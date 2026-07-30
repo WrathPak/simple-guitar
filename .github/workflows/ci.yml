@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 "on":
   push:
@@ -129,7 +129,7 @@ jobs:
           fi
 
       # --- pluginval: plugin conformance check on the built VST3 -------------
-      # continue-on-error: true for now (M0 is proving the skeleton builds and
+      # continue-on-error: false for now (M0 is proving the skeleton builds and
       # passes basic conformance is a bonus, not a gate yet). Flip this to
       # `false` at the M0 acceptance gate once the plugin is
       # expected to reliably pass strictness 8.
@@ -167,7 +167,7 @@ jobs:
 
       - name: pluginval --validate
         if: steps.vst3.outputs.found == 'true'
-        continue-on-error: true
+        continue-on-error: false
         shell: bash
         run: |
-          "$PLUGINVAL" --strictness-level 8 --validate "${{ steps.vst3.outputs.path }}"
+          "$PLUGINVAL" --strictness-level 10 --validate "${{ steps.vst3.outputs.path }}"
