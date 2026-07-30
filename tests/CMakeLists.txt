@@ -26,10 +26,15 @@ add_executable(sg_tests
   engine/PostEqTest.cpp
   engine/IrLoaderTest.cpp
   engine/NamTest.cpp
+  engine/BundledNamTest.cpp
   engine/ScreamerTest.cpp
   engine/StereoDelayTest.cpp
   engine/PlateReverbTest.cpp
   app/ChainOrderTest.cpp
+  app/BundledPresetsTest.cpp
+  app/ContentInstallerTest.cpp
+  ../app/source/PresetStore.cpp
+  ../app/source/ContentInstallerCore.cpp
 )
 
 target_link_libraries(sg_tests
@@ -53,8 +58,16 @@ target_compile_features(sg_tests PRIVATE cxx_std_20)
 # model (example_models/lstm.nam), already present on disk once
 # FetchContent_MakeAvailable(NeuralAmpModelerCore) has run in the top-level
 # CMakeLists.txt -- no hand-authored .nam fixture needed.
+#
+# Fixtures for the content-verification tests (engine/BundledNamTest.cpp,
+# app/BundledPresetsTest.cpp): the committed content/ directory itself, read
+# directly off disk rather than through the built content zip/BinaryData --
+# these tests validate the actual source-of-truth files the build embeds.
 target_compile_definitions(sg_tests PRIVATE
-  SG_NAM_TEST_MODEL_PATH="${neuralampmodelercore_SOURCE_DIR}/example_models/lstm.nam")
+  SG_NAM_TEST_MODEL_PATH="${neuralampmodelercore_SOURCE_DIR}/example_models/lstm.nam"
+  SG_CONTENT_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../content/models"
+  SG_CONTENT_IRS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../content/irs"
+  SG_CONTENT_PRESETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../content/presets")
 
 include(CTest)
 include(Catch)

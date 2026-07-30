@@ -1,6 +1,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#include "ContentInstaller.h"
+
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -94,6 +96,12 @@ SimpleGuitarAudioProcessor::SimpleGuitarAudioProcessor()
     // presetsState the UI asks for already has somewhere to scan.
     sg::ensureLibraryFoldersExist();
     sg::ensurePresetsFolderExists();
+
+    // First-run install of the bundled factory content (models/IRs/presets,
+    // embedded as BinaryData -- see app/CMakeLists.txt and ContentInstaller.h).
+    // Copy-if-absent per file, so this is cheap and safe to run on every
+    // startup, not just a true first run.
+    sg::installBundledContent();
 
     // Baseline for dirty-tracking (see the class-level comment): freshly
     // constructed, at the default param values, reads as "not dirty".

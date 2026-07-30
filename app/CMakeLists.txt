@@ -72,6 +72,49 @@ add_custom_target(sg_ui_bundle DEPENDS "${SG_UI_ZIP}")
 add_dependencies(sg_ui_bundle sg_ui_build)
 add_dependencies(SimpleGuitarUiData sg_ui_bundle)
 
+# ---------------------------------------------------------------------------
+# Factory content embedding: zip content/ (models/*.nam, irs/*.wav,
+# presets/*.sgpreset, ATTRIBUTION.md -- see content/ATTRIBUTION.md) and embed
+# it as BinaryData, same mechanism as the ui/dist embedding above. Content is
+# static/committed (no npm-style build step needed first), so this only needs
+# the zip-then-embed half of that pattern; strict ordering is still enforced
+# with its own custom target (see the ui block's comment for why chained
+# custom commands landing in the same project can't be trusted to
+# self-order on the Visual Studio generator).
+set(SG_CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../content")
+set(SG_CONTENT_ZIP "${CMAKE_CURRENT_BINARY_DIR}/content/sgcontent.zip")
+
+file(GLOB_RECURSE SG_CONTENT_SOURCE_FILES CONFIGURE_DEPENDS
+    "${SG_CONTENT_DIR}/*"
+)
+
+add_custom_command(
+    OUTPUT "${SG_CONTENT_ZIP}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/content"
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${SG_CONTENT_DIR}"
+            "${CMAKE_COMMAND}" -E tar "cf" "${SG_CONTENT_ZIP}" --format=zip .
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    DEPENDS ${SG_CONTENT_SOURCE_FILES}
+    COMMENT "content: zipping content/ -> ${SG_CONTENT_ZIP}"
+    VERBATIM
+)
+
+# Distinct NAMESPACE/HEADER_NAME (default for both is BinaryData/BinaryData.h):
+# a second juce_add_binary_data target using the defaults would generate its
+# own same-named BinaryData.h in the "BinaryData" namespace, which collides
+# with SimpleGuitarUiData's own BinaryData.h the moment both targets' include
+# dirs land on the same consuming target (SimpleGuitar) -- #include <BinaryData.h>
+# would then resolve to whichever one wins the include-path race, not
+# necessarily the one a given .cpp actually wants.
+juce_add_binary_data(SimpleGuitarContentData
+    NAMESPACE   ContentBinaryData
+    HEADER_NAME ContentBinaryData.h
+    SOURCES     "${SG_CONTENT_ZIP}"
+)
+
+add_custom_target(sg_content_bundle DEPENDS "${SG_CONTENT_ZIP}")
+add_dependencies(SimpleGuitarContentData sg_content_bundle)
+
 juce_add_plugin(SimpleGuitar
     COMPANY_NAME                "Simple Guitar"
     PRODUCT_NAME                "Simple Guitar"
@@ -97,6 +140,8 @@ target_sources(SimpleGuitar
         source/WebviewBridge.cpp
         source/RigLibrary.cpp
         source/PresetStore.cpp
+        source/ContentInstaller.cpp
+        source/ContentInstallerCore.cpp
 )
 
 target_compile_definitions(SimpleGuitar
@@ -124,6 +169,7 @@ target_link_libraries(SimpleGuitar
     PRIVATE
         sg_engine
         SimpleGuitarUiData
+        SimpleGuitarContentData
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_dsp
