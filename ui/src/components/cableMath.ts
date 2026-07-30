@@ -1,13 +1,18 @@
 /**
  * Pure geometry for the two kinds of patch cable on the floor:
  *
- * - Pedal to pedal: exits the OUT jack going straight up, arches proudly
- *   above the pedal tops, and drops straight down into the next IN jack —
- *   a cable dressed in a deliberate loop, not a wire sagging under gravity.
+ * - Pedal to pedal: a short vertical stub up out of the OUT jack, a tight
+ *   rounded corner into a flat-ish run above the pedal tops, a mirrored
+ *   corner, then a stub straight down into the next IN jack — crisp,
+ *   deliberate cable dressing, not a soft rope sagging or ballooning.
  * - Last pedal to the amp: stylized orthogonal routing — straight up,
  *   a rounded 90° corner, a clean horizontal run, another rounded corner,
  *   then straight up behind the amp — the way a pedalboard gets dressed
  *   for a photo.
+ *
+ * Both shapes are built from the same primitive: a straight run in, a
+ * quarter-circle (approximated with a cubic bezier) rounding the corner,
+ * and a straight run out.
  */
 
 export interface Point {
@@ -44,60 +49,87 @@ function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
-// ---- Pedal-to-pedal arch ----------------------------------------------
+// ---- Shared corner primitive -------------------------------------------
 
-export const MIN_ARCH_HEIGHT = 30;
-export const MAX_ARCH_HEIGHT = 45;
-/** How much of the peak-to-peak span becomes arch height, before clamping. */
-const ARCH_HEIGHT_RATIO = 0.3;
-/** How flat the top of the arch is: half-width of the flat span, before clamping. */
-const ARCH_SPREAD_RATIO = 0.2;
-const MAX_ARCH_SPREAD = 36;
+/** Cubic-bezier approximation of a quarter circle. */
+const KAPPA = 0.5523;
+
+interface Corner {
+  /** Where the straight run-in ends and the curve begins. */
+  entry: Point;
+  /** Where the curve ends and the straight run-out begins. */
+  exit: Point;
+  c1: Point;
+  c2: Point;
+}
+
+/**
+ * A rounded corner of radius `r` at `corner`, turning from `dirIn` (unit
+ * vector, the direction of travel arriving at the corner) to `dirOut` (unit
+ * vector, the direction of travel leaving it).
+ */
+function roundedCorner(corner: Point, dirIn: Point, dirOut: Point, r: number): Corner {
+  const entry: Point = { x: corner.x - dirIn.x * r, y: corner.y - dirIn.y * r };
+  const exit: Point = { x: corner.x + dirOut.x * r, y: corner.y + dirOut.y * r };
+  const c1: Point = { x: entry.x + dirIn.x * r * KAPPA, y: entry.y + dirIn.y * r * KAPPA };
+  const c2: Point = { x: exit.x - dirOut.x * r * KAPPA, y: exit.y - dirOut.y * r * KAPPA };
+  return { entry, exit, c1, c2 };
+}
+
+function cornerSegment(corner: Corner): string {
+  return `C ${round(corner.c1.x)} ${round(corner.c1.y)}, ${round(corner.c2.x)} ${round(corner.c2.y)}, ${round(corner.exit.x)} ${round(corner.exit.y)}`;
+}
+
+/** Bounds a desired corner radius to whatever room the geometry actually has, with a small floor. */
+function cornerRadiusFor(desired: number, ...spans: number[]): number {
+  const maxAllowed = Math.max(4, Math.min(...spans.map((s) => Math.abs(s) / 2)));
+  return Math.max(4, Math.min(desired, maxAllowed));
+}
+
+// ---- Pedal-to-pedal arch ------------------------------------------------
+
+export const MIN_ARCH_HEIGHT = 18;
+export const MAX_ARCH_HEIGHT = 28;
+/** How much of the OUT-to-IN span becomes arch height, before clamping. */
+const ARCH_HEIGHT_RATIO = 0.24;
+/** Tight, crisp corner radius — deliberately smaller than the amp run's, so the turn reads sharp. */
+export const ARCH_CORNER_RADIUS = 11;
 
 function archHeightFor(span: number): number {
   return clamp(Math.abs(span) * ARCH_HEIGHT_RATIO, MIN_ARCH_HEIGHT, MAX_ARCH_HEIGHT);
 }
 
-function archSpreadFor(span: number): number {
-  return Math.min(Math.abs(span) * ARCH_SPREAD_RATIO, MAX_ARCH_SPREAD);
-}
-
 /**
  * SVG path `d` for a pedal-to-pedal cable: a short vertical stub up from
- * `a`, a flat-topped rounded arch above the jack line, then a stub straight
- * down into `b`. Two cubic segments sharing a horizontal tangent at the
- * apex, so the join is smooth.
+ * `a`, a tight rounded corner into a flat run above the jack line, a
+ * mirrored corner, then a stub straight down into `b`. Deliberately sharp —
+ * short corners, not one big soft arch.
  */
-export function pedalArchPath(a: Point, b: Point): string {
+export function pedalArchPath(a: Point, b: Point, cornerRadius: number = ARCH_CORNER_RADIUS): string {
   const dx = b.x - a.x;
-  const midX = (a.x + b.x) / 2;
+  const dirX = dx >= 0 ? 1 : -1;
   const jackLine = Math.min(a.y, b.y);
   const apexY = jackLine - archHeightFor(dx);
-  const spread = archSpreadFor(dx);
+  const r = cornerRadiusFor(cornerRadius, a.y - apexY, b.y - apexY, dx);
 
-  const upCtrl: Point = { x: a.x, y: apexY };
-  const preApex: Point = { x: midX - spread, y: apexY };
-  const apex: Point = { x: midX, y: apexY };
-  const postApex: Point = { x: midX + spread, y: apexY };
-  const downCtrl: Point = { x: b.x, y: apexY };
+  // Left corner: turns from "straight up out of `a`" to "flat, toward `b`".
+  const left = roundedCorner({ x: a.x, y: apexY }, { x: 0, y: -1 }, { x: dirX, y: 0 }, r);
+  // Right corner: turns from "flat" to "straight down into `b`".
+  const right = roundedCorner({ x: b.x, y: apexY }, { x: dirX, y: 0 }, { x: 0, y: 1 }, r);
 
   return [
     `M ${round(a.x)} ${round(a.y)}`,
-    `C ${round(upCtrl.x)} ${round(upCtrl.y)}, ${round(preApex.x)} ${round(preApex.y)}, ${round(apex.x)} ${round(apex.y)}`,
-    `C ${round(postApex.x)} ${round(postApex.y)}, ${round(downCtrl.x)} ${round(downCtrl.y)}, ${round(b.x)} ${round(b.y)}`,
+    `L ${round(left.entry.x)} ${round(left.entry.y)}`,
+    cornerSegment(left),
+    `L ${round(right.entry.x)} ${round(right.entry.y)}`,
+    cornerSegment(right),
+    `L ${round(b.x)} ${round(b.y)}`,
   ].join(" ");
 }
 
-// ---- Last pedal to amp: orthogonal routing ----------------------------
+// ---- Last pedal to amp: orthogonal routing ------------------------------
 
 export const DEFAULT_CORNER_RADIUS = 17;
-/** Cubic-bezier approximation of a quarter circle. */
-const KAPPA = 0.5523;
-
-function cornerRadiusFor(desired: number, ...spans: number[]): number {
-  const maxAllowed = Math.max(4, Math.min(...spans.map((s) => Math.abs(s) / 2)));
-  return Math.max(4, Math.min(desired, maxAllowed));
-}
 
 /**
  * SVG path `d` for the last pedal's cable up to the amp: straight up from
@@ -110,22 +142,17 @@ export function ampRoutePath(out: Point, anchor: Point, cornerRadius: number = D
   const railY = (out.y + anchor.y) / 2;
   const r = cornerRadiusFor(cornerRadius, out.y - railY, railY - anchor.y, anchor.x - out.x);
 
-  const p1: Point = { x: out.x, y: railY + r };
-  const p2: Point = { x: out.x + dirX * r, y: railY };
-  const c1a: Point = { x: out.x, y: railY + r - r * KAPPA };
-  const c1b: Point = { x: out.x + dirX * r * (1 - KAPPA), y: railY };
-
-  const p3: Point = { x: anchor.x - dirX * r, y: railY };
-  const p4: Point = { x: anchor.x, y: railY - r };
-  const c2a: Point = { x: anchor.x - dirX * r * (1 - KAPPA), y: railY };
-  const c2b: Point = { x: anchor.x, y: railY - r + r * KAPPA };
+  // First corner: turns from "straight up out of `out`" to "horizontal, toward `anchor`".
+  const first = roundedCorner({ x: out.x, y: railY }, { x: 0, y: -1 }, { x: dirX, y: 0 }, r);
+  // Second corner: turns from "horizontal" back to "straight up into `anchor`".
+  const second = roundedCorner({ x: anchor.x, y: railY }, { x: dirX, y: 0 }, { x: 0, y: -1 }, r);
 
   return [
     `M ${round(out.x)} ${round(out.y)}`,
-    `L ${round(p1.x)} ${round(p1.y)}`,
-    `C ${round(c1a.x)} ${round(c1a.y)}, ${round(c1b.x)} ${round(c1b.y)}, ${round(p2.x)} ${round(p2.y)}`,
-    `L ${round(p3.x)} ${round(p3.y)}`,
-    `C ${round(c2a.x)} ${round(c2a.y)}, ${round(c2b.x)} ${round(c2b.y)}, ${round(p4.x)} ${round(p4.y)}`,
+    `L ${round(first.entry.x)} ${round(first.entry.y)}`,
+    cornerSegment(first),
+    `L ${round(second.entry.x)} ${round(second.entry.y)}`,
+    cornerSegment(second),
     `L ${round(anchor.x)} ${round(anchor.y)}`,
   ].join(" ");
 }

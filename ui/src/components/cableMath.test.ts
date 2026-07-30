@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { ampRoutePath, DEFAULT_CORNER_RADIUS, MAX_ARCH_HEIGHT, MIN_ARCH_HEIGHT, pedalArchPath, portTopCenter } from "./cableMath";
+import {
+  ampRoutePath,
+  ARCH_CORNER_RADIUS,
+  DEFAULT_CORNER_RADIUS,
+  MAX_ARCH_HEIGHT,
+  MIN_ARCH_HEIGHT,
+  pedalArchPath,
+  portTopCenter,
+} from "./cableMath";
+
+/** Mirrors cableMath's own (unexported) arch-height formula, to independently verify its output. */
+function archHeightForSpan(span: number): number {
+  return Math.min(MAX_ARCH_HEIGHT, Math.max(MIN_ARCH_HEIGHT, Math.abs(span) * 0.24));
+}
 
 describe("portTopCenter", () => {
   it("is horizontally centered on the port", () => {
@@ -29,57 +42,95 @@ describe("pedalArchPath", () => {
     expect(d.endsWith("200 600")).toBe(true);
   });
 
-  it("is two cubic segments (an up-stub, arch, down-stub in one smooth curve)", () => {
+  it("is a sharp turn, not a soft arch: straight stub, tight corner, flat run, tight corner, straight stub (3 L, 2 C)", () => {
     const d = pedalArchPath({ x: 0, y: 600 }, { x: 150, y: 600 });
-    expect(d).toMatch(/^M [\d.-]+ [\d.-]+ C [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+ C [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+$/);
+    const lCount = (d.match(/(?:^|\s)L\s/g) ?? []).length;
+    const cCount = (d.match(/(?:^|\s)C\s/g) ?? []).length;
+    expect(lCount).toBe(3);
+    expect(cCount).toBe(2);
   });
 
-  it("exits each jack going straight up: control points sit directly above the start/end x", () => {
+  it("keeps a straight vertical stub exiting each jack before the corner starts", () => {
     const a = { x: 40, y: 600 };
     const b = { x: 260, y: 600 };
     const d = pedalArchPath(a, b);
-    const coords = d.match(/-?[\d.]+/g)!.map(Number);
-    // M ax ay  C c1x c1y, c2x c2y, apexX apexY  C c3x c3y, c4x c4y, bx by
-    const [, , c1x, , , , , c1y, , , c4x, c4y] = coords;
-    expect(c1x).toBeCloseTo(a.x, 5); // first control point directly above `a`
-    expect(c4x).toBeCloseTo(b.x, 5); // last control point directly above `b`
-    expect(c1y).toBeLessThan(a.y); // above the jack line
-    expect(c4y).toBeLessThan(b.y);
+    // First L = top of the straight stub out of `a` (still directly above it, corner hasn't started).
+    const lMatches = [...d.matchAll(/L ([\d.-]+) ([\d.-]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }));
+    expect(lMatches[0].x).toBeCloseTo(a.x, 5);
+    expect(lMatches[0].y).toBeLessThan(a.y);
+    // The second C command's endpoint is where the corner finishes turning back to vertical,
+    // directly above `b` — that's the top of the straight stub down into `b`.
+    const secondCorner = [...d.matchAll(/C [\d.-]+ [\d.-]+, [\d.-]+ [\d.-]+, ([\d.-]+) ([\d.-]+)/g)][1];
+    const stubIntoB = { x: Number(secondCorner[1]), y: Number(secondCorner[2]) };
+    expect(stubIntoB.x).toBeCloseTo(b.x, 5);
+    expect(stubIntoB.y).toBeLessThan(b.y);
   });
 
-  it("arches within the 30-45px design range for a normal pedal gap", () => {
+  it("arches within the 18-28px design range for a normal pedal gap (lower and tighter than before)", () => {
     const a = { x: 0, y: 600 };
     const b = { x: 140, y: 600 }; // typical OUT-to-next-IN gap
     const d = pedalArchPath(a, b);
-    const coords = d.match(/-?[\d.]+/g)!.map(Number);
-    const apexY = coords[7]; // end of first C command: apexX, apexY
     const jackLine = Math.min(a.y, b.y);
-    const height = jackLine - apexY;
-    expect(height).toBeGreaterThanOrEqual(MIN_ARCH_HEIGHT);
-    expect(height).toBeLessThanOrEqual(MAX_ARCH_HEIGHT);
+    // The flat run's height is the corner's exit point — the 2nd coordinate pair of the first C command.
+    const cMatch = d.match(/C [\d.-]+ [\d.-]+, ([\d.-]+) ([\d.-]+),/)!;
+    const flatY = Number(cMatch[2]);
+    const archHeight = jackLine - flatY;
+    expect(archHeight).toBeGreaterThanOrEqual(MIN_ARCH_HEIGHT);
+    expect(archHeight).toBeLessThanOrEqual(MAX_ARCH_HEIGHT);
   });
 
   it("clamps arch height for a very short span to the minimum", () => {
     const d = pedalArchPath({ x: 0, y: 600 }, { x: 4, y: 600 });
-    const coords = d.match(/-?[\d.]+/g)!.map(Number);
-    const apexY = coords[7];
-    expect(600 - apexY).toBeCloseTo(MIN_ARCH_HEIGHT, 5);
+    const cMatch = d.match(/C [\d.-]+ [\d.-]+, ([\d.-]+) ([\d.-]+),/)!;
+    const flatY = Number(cMatch[2]);
+    // A 4px span can't fit two 11px corner radii either, so this also exercises the radius clamp —
+    // the important thing is the arch height itself still respects the minimum.
+    expect(600 - flatY).toBeCloseTo(MIN_ARCH_HEIGHT, 5);
   });
 
   it("clamps arch height for a very long span to the maximum", () => {
     const d = pedalArchPath({ x: 0, y: 600 }, { x: 900, y: 600 });
-    const coords = d.match(/-?[\d.]+/g)!.map(Number);
-    const apexY = coords[7];
-    expect(600 - apexY).toBeCloseTo(MAX_ARCH_HEIGHT, 5);
+    const cMatch = d.match(/C [\d.-]+ [\d.-]+, ([\d.-]+) ([\d.-]+),/)!;
+    const flatY = Number(cMatch[2]);
+    expect(600 - flatY).toBeCloseTo(MAX_ARCH_HEIGHT, 5);
   });
 
   it("still arches above the jack line when the two jacks sit at slightly different heights", () => {
     const a = { x: 0, y: 590 };
     const b = { x: 150, y: 610 };
     const d = pedalArchPath(a, b);
-    const coords = d.match(/-?[\d.]+/g)!.map(Number);
-    const apexY = coords[7];
-    expect(apexY).toBeLessThan(Math.min(a.y, b.y));
+    const cMatch = d.match(/C [\d.-]+ [\d.-]+, ([\d.-]+) ([\d.-]+),/)!;
+    const flatY = Number(cMatch[2]);
+    expect(flatY).toBeLessThan(Math.min(a.y, b.y));
+  });
+
+  it("turns sharply: the default corner radius is much tighter than the amp run's", () => {
+    expect(ARCH_CORNER_RADIUS).toBeLessThan(DEFAULT_CORNER_RADIUS);
+  });
+
+  it("uses the requested (tight) corner radius when there's room for it", () => {
+    const a = { x: 0, y: 600 };
+    const b = { x: 200, y: 600 };
+    const d = pedalArchPath(a, b);
+    const lMatches = [...d.matchAll(/L ([\d.-]+) ([\d.-]+)/g)].map((m) => Number(m[2]));
+    const jackLine = 600;
+    const flatY = jackLine - archHeightForSpan(200);
+    // The stub's top (end of the first L) sits exactly `cornerRadius` short of the flat run.
+    expect(lMatches[0] - flatY).toBeCloseTo(ARCH_CORNER_RADIUS, 5);
+  });
+
+  it("keeps the corners tighter than the amp run's when both have room, so pedal cables read as sharper", () => {
+    const pedal = pedalArchPath({ x: 0, y: 600 }, { x: 300, y: 600 });
+    const amp = ampRoutePath({ x: 0, y: 600 }, { x: 300, y: 300 });
+    const pedalStubLength = (() => {
+      const l = [...pedal.matchAll(/L ([\d.-]+) ([\d.-]+)/g)].map((m) => Number(m[2]));
+      return 600 - l[0];
+    })();
+    const ampStubLength = (() => {
+      const l = [...amp.matchAll(/L ([\d.-]+) ([\d.-]+)/g)].map((m) => Number(m[2]));
+      return 600 - l[0];
+    })();
+    expect(pedalStubLength).toBeLessThan(ampStubLength);
   });
 });
 

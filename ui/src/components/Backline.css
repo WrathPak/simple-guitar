@@ -5,13 +5,13 @@
   transform-origin: bottom center;
   /*
    * Leaves a clear floor gap between the cab's bottom edge and the pedal
-   * row's top-jack line (target ~50-70px at the default 1180x760 window) so
+   * row's top-jack line (target ~90-110px at the default 1180x760 window) so
    * the amp cable's horizontal rail has room to read as a deliberate run,
    * not get crowded against the pedals. Both this and the pedal row are
    * anchored to the room's bottom edge with fixed offsets, so the gap
    * between them holds steady across window sizes rather than collapsing.
    */
-  margin-bottom: 160px;
+  margin-bottom: 205px;
 }
 
 .backline-stack {
