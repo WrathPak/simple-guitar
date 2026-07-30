@@ -1,0 +1,25 @@
+.pedal-row {
+  position: absolute;
+  bottom: 44px;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 34px;
+}
+
+.pedal-row-add {
+  width: 120px;
+  height: 96px;
+  border-radius: 12px;
+  align-self: flex-end;
+  margin-bottom: 6px;
+  border: 1.5px dashed #26262c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #3c3c44;
+  font-size: 18px;
+}

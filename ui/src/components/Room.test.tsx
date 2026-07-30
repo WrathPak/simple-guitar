@@ -1,0 +1,132 @@
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { JuceBackend } from "../bridge/juceClient";
+import { Room } from "./Room";
+
+/**
+ * A fake window.__JUCE__.backend so the OUTPUT knob's round trip through the
+ * real bridge contract (see bridge/sliderState.ts) can be tested in
+ * isolation, without touching the dev-fallback module singleton that other
+ * tests in this file rely on staying untouched.
+ */
+function createFakeJuceBackend() {
+  const listeners = new Map<string, Set<(data: unknown) => void>>();
+  const emitted: { id: string; data: unknown }[] = [];
+  const backend: JuceBackend = {
+    addEventListener(id, listener) {
+      if (!listeners.has(id)) listeners.set(id, new Set());
+      listeners.get(id)!.add(listener);
+    },
+    removeEventListener(id, listener) {
+      listeners.get(id)?.delete(listener);
+    },
+    emitEvent(id, data) {
+      emitted.push({ id, data });
+    },
+  };
+  return {
+    backend,
+    emitted,
+    trigger(id: string, data: unknown) {
+      listeners.get(id)?.forEach((listener) => listener(data));
+    },
+  };
+}
+
+describe("Room camera", () => {
+  beforeEach(() => {
+    delete window.__JUCE__;
+  });
+
+  it("wide shot has no focused device", () => {
+    render(<Room />);
+    expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+    expect(screen.getByText(/Click gear to focus/)).toBeInTheDocument();
+  });
+
+  it("dollies in on amp click and steps back on Esc", () => {
+    render(<Room />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Focus amplifier" }));
+    expect(screen.getByRole("slider", { name: "Output" })).toBeInTheDocument();
+    expect(screen.getByText("change model ▾")).toBeInTheDocument();
+    expect(screen.getByText(/step back/)).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("slider", { name: "Output" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Click gear to focus/)).toBeInTheDocument();
+  });
+
+  it("dollies in on a pedal click, shows delay's contextual tap/bpm, and steps back on backdrop click", () => {
+    render(<Room />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Focus echoes" }));
+    expect(screen.getByText("Tap · 122 BPM · Sync ¼")).toBeInTheDocument();
+
+    const backdrop = document.querySelector(".room-scene-wrap");
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop!);
+    expect(screen.queryByText("Tap · 122 BPM · Sync ¼")).not.toBeInTheDocument();
+  });
+
+  it("shows no contextual line for a non-delay pedal", () => {
+    render(<Room />);
+    fireEvent.click(screen.getByRole("button", { name: "Focus screamer" }));
+    expect(screen.queryByText(/BPM/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Pedal footswitch bypass", () => {
+  beforeEach(() => {
+    delete window.__JUCE__;
+  });
+
+  it("toggles the shell and LED without triggering focus", () => {
+    render(<Room />);
+
+    const footswitch = screen.getByRole("button", { name: "echoes bypass" });
+    const pedal = footswitch.closest(".pedal");
+    expect(pedal).not.toBeNull();
+    expect(pedal).not.toHaveClass("pedal--bypassed");
+    expect(footswitch).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(footswitch);
+    expect(pedal).toHaveClass("pedal--bypassed");
+    expect(footswitch).toHaveAttribute("aria-pressed", "false");
+    // Bypassing must not focus the pedal.
+    expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+
+    fireEvent.click(footswitch);
+    expect(pedal).not.toHaveClass("pedal--bypassed");
+    expect(footswitch).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+describe("AmpDevice OUTPUT knob <-> bridge round trip", () => {
+  afterEach(() => {
+    delete window.__JUCE__;
+  });
+
+  it("emits valueChanged when dragged, and reflects backend-originated updates", () => {
+    const fake = createFakeJuceBackend();
+    window.__JUCE__ = { backend: fake.backend };
+
+    render(<Room />);
+    fireEvent.click(screen.getByRole("button", { name: "Focus amplifier" }));
+    const outputKnob = screen.getByRole("slider", { name: "Output" });
+
+    fireEvent.pointerDown(outputKnob, { clientY: 200, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(outputKnob, { clientY: 100, pointerId: 1 });
+
+    const lastEmit = fake.emitted.at(-1);
+    expect(lastEmit?.id).toBe("outputGain");
+    expect(lastEmit?.data).toMatchObject({ type: "valueChanged" });
+    expect((lastEmit!.data as { value: number }).value).toBeGreaterThan(0.75);
+
+    // Backend -> JS direction: a native-originated value change updates the same knob.
+    act(() => {
+      fake.trigger("outputGain", { type: "valueChanged", value: 0.2 });
+    });
+    expect(outputKnob).toHaveAttribute("aria-valuenow", "0.2");
+  });
+});

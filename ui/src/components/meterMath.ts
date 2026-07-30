@@ -1,5 +1,5 @@
 /**
- * Pure math for VMeter: dB clamping and dB <-> fill-fraction mapping.
+ * Pure math for the level meters: dB clamping and dB <-> fill-fraction mapping.
  */
 
 export const METER_MIN_DB = -60;

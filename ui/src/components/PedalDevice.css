@@ -1,0 +1,170 @@
+.pedal-trigger {
+  display: block;
+  cursor: pointer;
+}
+
+.pedal-trigger:focus-visible .pedal,
+.pedal:focus-visible {
+  outline: 2px solid var(--text-mid);
+  outline-offset: 3px;
+}
+
+.pedal {
+  --pw: 170px;
+  width: var(--pw);
+  border-radius: 12px;
+  padding: 11px 11px 13px;
+  position: relative;
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.13), inset 0 -3px 8px rgba(0, 0, 0, 0.35);
+  transition: filter var(--camera-duration) var(--camera-ease);
+}
+
+.pedal--wide {
+  transform: scale(0.82);
+  transform-origin: bottom center;
+}
+
+.pedal--focused {
+  --pw: 300px;
+  border-radius: 18px;
+  padding: 18px 18px 20px;
+}
+
+.pedal-panel {
+  border-radius: 7px;
+  background: rgba(10, 10, 12, 0.82);
+  padding: 10px 8px 8px;
+  box-shadow: inset 0 2px 7px rgba(0, 0, 0, 0.65);
+  display: flex;
+  justify-content: space-around;
+}
+
+.pedal-knob-well {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.pedal-deco-knob {
+  --po: calc(var(--pw) * 0.095);
+  width: calc(var(--pw) * 0.19);
+  height: calc(var(--pw) * 0.19);
+  border-radius: 50%;
+  position: relative;
+  background: radial-gradient(circle at 36% 28%, #3c3c42, #141416 68%);
+  box-shadow: 0 3px 7px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.16);
+}
+
+.pedal-deco-knob::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 7%;
+  width: 2px;
+  height: 30%;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: #e8e8ea;
+  transform-origin: 50% var(--po);
+  transform: rotate(var(--r, 0deg));
+}
+
+.pedal-deco-label {
+  font-size: 7.5px;
+  letter-spacing: 0.14em;
+  color: #9c9ca6;
+  text-transform: uppercase;
+}
+
+.pedal--focused .pedal-deco-label {
+  font-size: 9.5px;
+}
+
+.pedal-name {
+  text-align: center;
+  margin: 9px 0 8px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+}
+
+.pedal--focused .pedal-name {
+  font-size: 17px;
+  margin: 14px 0 12px;
+}
+
+.pedal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+}
+
+.pedal-led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.pedal--focused .pedal-led {
+  width: 9px;
+  height: 9px;
+}
+
+.pedal-footswitch {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+  background: radial-gradient(circle at 38% 30%, #8f9096, #4d4e54 55%, #2a2b30);
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.4), 0 0 0 3px rgba(0, 0, 0, 0.25);
+}
+
+.pedal--focused .pedal-footswitch {
+  width: 38px;
+  height: 38px;
+}
+
+/* Family shells + LED colors — the only saturated color in the app. */
+.pedal--drive {
+  background: linear-gradient(180deg, var(--family-drive-grad-a), var(--family-drive-grad-b));
+}
+.pedal--drive .pedal-name {
+  color: #cfe3d3;
+}
+.pedal--drive .pedal-led {
+  background: radial-gradient(circle at 40% 35%, #ffd9a8, var(--family-drive-led) 60%, #6e4104);
+  box-shadow: 0 0 8px rgba(235, 150, 40, 0.9);
+}
+
+.pedal--delay {
+  background: linear-gradient(180deg, var(--family-delay-grad-a), var(--family-delay-grad-b));
+}
+.pedal--delay .pedal-name {
+  color: #d9d2ea;
+}
+.pedal--delay .pedal-led {
+  background: radial-gradient(circle at 40% 35%, #d6c1ff, var(--family-delay-led) 60%, #3c2380);
+  box-shadow: 0 0 8px rgba(150, 110, 240, 0.9);
+}
+
+.pedal--verb {
+  background: linear-gradient(180deg, var(--family-reverb-grad-a), var(--family-reverb-grad-b));
+}
+.pedal--verb .pedal-name {
+  color: #cfe2e6;
+}
+.pedal--verb .pedal-led {
+  background: radial-gradient(circle at 40% 35%, #bdf0ff, var(--family-reverb-led) 60%, #14586e);
+  box-shadow: 0 0 8px rgba(80, 190, 225, 0.9);
+}
+
+/* Bypass: shell desaturated + dimmed, LED dark. No other on/off UI. */
+.pedal--bypassed {
+  filter: saturate(0.35) brightness(0.72);
+}
+.pedal--bypassed .pedal-led {
+  background: #2c2c31;
+  box-shadow: none;
+}

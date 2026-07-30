@@ -9,5 +9,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    // Process real CSS so computed-style assertions (e.g. no page scroll) mean something.
+    css: true,
   },
 });

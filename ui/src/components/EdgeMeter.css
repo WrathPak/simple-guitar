@@ -1,0 +1,38 @@
+.edge-meter {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 130px;
+  border-radius: 2px;
+  background: var(--chrome-hairline);
+  overflow: hidden;
+  z-index: 5;
+}
+
+.edge-meter--l {
+  left: 7px;
+}
+
+.edge-meter--r {
+  right: 7px;
+}
+
+.edge-meter-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--meter-fill);
+  opacity: 0.85;
+  transition: height 60ms linear;
+}
+
+.edge-meter-hold {
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  height: 1.5px;
+  background: var(--text-hi);
+  opacity: 0.7;
+}

@@ -1,0 +1,128 @@
+.amp-head {
+  --w: 520px;
+  position: relative;
+  width: var(--w);
+  border-radius: 9px;
+  padding: 9px 9px 10px;
+  background:
+    repeating-linear-gradient(25deg, rgba(255, 255, 255, 0.016) 0 2px, transparent 2px 4px),
+    repeating-linear-gradient(-25deg, rgba(0, 0, 0, 0.25) 0 2px, transparent 2px 4px),
+    linear-gradient(180deg, var(--family-amp-grad-a), var(--family-amp-grad-b));
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  text-align: left;
+  cursor: default;
+}
+
+button.amp-head--wide {
+  cursor: pointer;
+}
+
+.amp-head--focused {
+  --w: 760px;
+}
+
+.amp-grille {
+  border-radius: 5px;
+  height: calc(var(--w) * 0.115);
+  position: relative;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(45deg, #26262c 0 3px, #1b1b20 3px 6px),
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.05) 0 3px, transparent 3px 6px),
+    #1d1d22;
+  box-shadow: inset 0 3px 10px rgba(0, 0, 0, 0.7);
+}
+
+.amp-grille::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(60% 130% at 50% 100%, rgba(184, 148, 72, 0.1), transparent 60%);
+}
+
+.amp-plate {
+  margin-top: 8px;
+  border-radius: 4px;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, var(--family-amp-plate-a), var(--family-amp-plate-b));
+  color: var(--plate-text-color);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), inset 0 -2px 4px rgba(0, 0, 0, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.amp-head--focused .amp-plate {
+  padding: 16px 24px 13px;
+  border-radius: 6px;
+}
+
+.amp-id-mark {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--plate-label-color);
+  text-transform: uppercase;
+}
+
+.amp-id-model {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--plate-text-color);
+  margin-top: 2px;
+  text-shadow: var(--plate-text-shadow);
+}
+
+.amp-id-change {
+  display: block;
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: 0.11em;
+  color: var(--plate-label-color);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.amp-deco-knobs {
+  display: flex;
+  gap: calc(var(--w) * 0.03);
+}
+
+.amp-deco-knob {
+  --po: 29px;
+  width: calc(var(--w) * 0.058);
+  height: calc(var(--w) * 0.058);
+  border-radius: 50%;
+  position: relative;
+  background: radial-gradient(circle at 36% 28%, #4a463c 0%, #262319 62%, #14120c 100%);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45), inset 0 1px 1px rgba(255, 255, 255, 0.25), 0 0 0 2px rgba(0, 0, 0, 0.08);
+}
+
+.amp-deco-knob::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 16%;
+  width: 8%;
+  height: 32%;
+  margin-left: -4%;
+  border-radius: 2px;
+  background: #efe8d6;
+  transform-origin: 50% var(--po);
+  transform: rotate(var(--r, 0deg));
+}
+
+.amp-knobs {
+  display: flex;
+  gap: 26px;
+}
+
+.amp-lamp {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  align-self: center;
+  flex-shrink: 0;
+  background: radial-gradient(circle at 40% 35%, var(--family-amp-lamp-a), var(--family-amp-lamp-b) 60%, var(--family-amp-lamp-c) 100%);
+  box-shadow: 0 0 10px rgba(230, 90, 40, 0.8);
+}

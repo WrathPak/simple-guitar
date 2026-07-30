@@ -9,22 +9,23 @@
   --chrome-bg: #0a0a0c;
   --chrome-hairline: #17171a;
 
-  /* Stage: radial #1a1a20 -> #0e0e11 -> #08080a (120% 90% at 50% -10%) + bottom vignette */
-  --stage-bg-a: #1a1a20;
-  --stage-bg-b: #0e0e11;
-  --stage-bg-c: #08080a;
-  --stage-vignette: rgba(0, 0, 0, 0.55);
-  --stage-bg: radial-gradient(
-    120% 90% at 50% -10%,
-    var(--stage-bg-a) 0%,
-    var(--stage-bg-b) 45%,
-    var(--stage-bg-c) 100%
-  );
-  --stage-vignette-bg: radial-gradient(
-    80% 60% at 50% 108%,
-    var(--stage-vignette),
-    transparent 60%
-  );
+  /* Room: radial #17171d -> #0d0d10 -> #070708 from top-center, + bottom vignette + floor light pool */
+  --room-bg-a: #17171d;
+  --room-bg-b: #0d0d10;
+  --room-bg-c: #070708;
+  --room-vignette: rgba(0, 0, 0, 0.5);
+  --room-floor-glow: rgba(214, 190, 140, 0.05);
+  --room-bg: radial-gradient(130% 100% at 50% -20%, var(--room-bg-a) 0%, var(--room-bg-b) 50%, var(--room-bg-c) 100%);
+  --room-vignette-bg: radial-gradient(75% 45% at 50% 104%, var(--room-vignette), transparent 60%);
+  --room-floor-bg: radial-gradient(70% 90% at 50% 100%, var(--room-floor-glow), transparent 65%);
+
+  /* Focus dolly: the wide scene when a device is focused behind it */
+  --focus-blur: 9px;
+  --focus-brightness: 0.45;
+  --focus-saturate: 0.7;
+  --focus-scale: 1.04;
+  --camera-duration: 190ms;
+  --camera-ease: cubic-bezier(0.16, 1, 0.3, 1);
 
   --text-hi: #e6e6e9;
   --text-mid: #7c7c85;
@@ -60,10 +61,6 @@
   --plate-text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
 
   --min-text-size: 8.5px;
-
-  /* ---- Window anatomy ---- */
-  --topbar-height: 74px;
-  --botbar-height: 44px;
 
   /* ---- Device family colors (the only saturated color in the app) ---- */
   /* Drive / Dist / Fuzz — moss enclosure, amber LED */
@@ -114,9 +111,4 @@
   --family-amp-lamp-a: #ffb08a;
   --family-amp-lamp-b: #d24a1e;
   --family-amp-lamp-c: #7c220c;
-
-  /* ---- Animation budget ---- */
-  --stage-swap-duration: 190ms;
-  --stage-swap-ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --stage-swap-rise: 8px;
 }

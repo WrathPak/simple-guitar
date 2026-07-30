@@ -2,9 +2,6 @@ import { useCallback, useMemo, useRef, useState, type CSSProperties, type Keyboa
 import "./Knob.css";
 import { clampNormalized, dragDeltaToValue, keyDeltaToValue, scrollDeltaToValue, valueToAngle } from "./knobMath";
 
-/** Physical cap sizes: 74 amp faceplate, 46 pedal, 34 chrome mini. */
-export type KnobSize = 74 | 46 | 34;
-
 export interface KnobProps {
   /** Normalized value 0..1. Omit to run uncontrolled (seeded by defaultValue). */
   value?: number;
@@ -12,7 +9,8 @@ export interface KnobProps {
   defaultValue?: number;
   /** Uppercase micro-label rendered below the cap. */
   label: string;
-  size?: KnobSize;
+  /** Physical cap diameter in px (58 amp faceplate, ~57 focused pedal, ...). */
+  size?: number;
   /** Formats the normalized value for the drag/hover tooltip only. */
   format?: (value: number) => string;
   onChange?: (value: number) => void;

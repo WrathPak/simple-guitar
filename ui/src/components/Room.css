@@ -1,0 +1,76 @@
+.room {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--room-bg);
+}
+
+.room::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--room-vignette-bg);
+}
+
+.room-scene-wrap {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.room-scene {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 64px;
+  transition: filter var(--camera-duration) var(--camera-ease), transform var(--camera-duration) var(--camera-ease);
+}
+
+.room-scene--blurred {
+  filter: blur(var(--focus-blur)) brightness(var(--focus-brightness)) saturate(var(--focus-saturate));
+  transform: scale(var(--focus-scale));
+  pointer-events: none;
+}
+
+.room-floor {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 46%;
+  background: var(--room-floor-bg);
+}
+
+.room-cable {
+  position: absolute;
+  bottom: 38px;
+  left: 50%;
+  width: 560px;
+  height: 26px;
+  transform: translateX(-50%);
+  z-index: 1;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Sits above the scene, below chrome. Transparent letterbox lets clicks fall
+   through to room-scene-wrap (which steps back out to the wide shot); only
+   the focused device itself is interactive. */
+.room-focus-wrap {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.room-focus-wrap > * {
+  pointer-events: auto;
+}
