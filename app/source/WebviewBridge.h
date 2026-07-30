@@ -39,13 +39,25 @@
          RigLibrary.h); anything else is rejected with a loadResult{ok:false}
          and no load is attempted.
 
-    JS -> native, channel "setChainOrder": { type: "setChainOrder", order: [pedalId, pedalId, pedalId] }
-      -- order must be exactly a permutation of "screamer"/"echoes"/"chamber";
-         anything else (wrong length, duplicate, unknown id) is silently
-         rejected -- no state change, no loadResult, no rigState reply. On
-         success the new order is applied to the audio thread immediately
-         (see PluginProcessor::setChainOrder(), glitch-free/allocation-free)
-         and echoed back on the next "rigState".
+    JS -> native, channel "setSlotType": { type: "setSlotType", slot: 0..5, pedalType: 0..6 }
+      -- picks a new pedal (or empty, pedalType 0) for the given slot; the
+         engine resets that slot's on/P1-4 to their flat defaults
+         (true/0.5/0.5/0.5/0.5), rebuilds the slot's DSP instance with a
+         short click-free crossfade (see PluginProcessor::setSlotType()),
+         and echoes a fresh "rigState". slot/pedalType out of range is
+         silently rejected -- no state change, no reply.
+
+    JS -> native, channel "movePedal": { type: "movePedal", from: 0..5, to: 0..5 }
+      -- moves the pedal at slot `from` to slot `to`; every slot strictly
+         between them shifts by one to close the gap (a standard array
+         move over all 6 slots, including empty ones). Only the affected
+         slots' PARAMETER VALUES (type/on/P1-4) move, via
+         setValueNotifyingHost -- host automation lanes stay slot-
+         positional; nothing about the underlying DSP instances is touched
+         directly by this message (see PluginProcessor::movePedal()).
+         from/to out of range is silently rejected; from == to is a
+         harmless no-op that still echoes "rigState". Success (including
+         the no-op case) echoes a fresh "rigState".
 
     native -> JS, channel "loadResult":
       { type: "loadResult", kind: "nam" | "ir", ok: boolean, message: string }
@@ -55,11 +67,13 @@
     native -> JS, channel "rigState":
       { type: "rigState", schemaVersion, namModelName: string|null,
         namModelSampleRate: number, irName: string|null,
-        chainOrder: [pedalId, pedalId, pedalId],
+        slots: [{type: 0..6, on: boolean}, ...6 entries],
         library: { models: [{name,path}], irs: [{name,path}] } }
-      -- sent on page load, after any load request or setChainOrder resolves,
-         and in reply to "requestRigState". Rescans the library folders each
-         time.
+      -- sent on page load, after any load request, setSlotType, or
+         movePedal resolves, and in reply to "requestRigState". slots[i] is
+         slot i's current pedal type + on/off -- slot index IS signal
+         order, there is no separate chain-order concept. Rescans the
+         library folders each time.
 
     Presets (see app/source/PresetStore.h for the on-disk format and
     PluginProcessor.h for the manager itself):
@@ -98,7 +112,8 @@ public:
     static constexpr const char* loadNamModelChannelId = "loadNamModel";
     static constexpr const char* loadIrChannelId = "loadIr";
     static constexpr const char* requestRigStateChannelId = "requestRigState";
-    static constexpr const char* setChainOrderChannelId = "setChainOrder";
+    static constexpr const char* setSlotTypeChannelId = "setSlotType";
+    static constexpr const char* movePedalChannelId = "movePedal";
     static constexpr const char* rigStateChannelId = "rigState";
     static constexpr const char* loadResultChannelId = "loadResult";
     static constexpr const char* loadPresetChannelId = "loadPreset";
@@ -111,8 +126,10 @@ public:
     static constexpr const char* presetResultChannelId = "presetResult";
 
     /** Bridge protocol version, carried on every rigState/presetsState
-        message (see schema/bridge.schema.json SchemaVersion). */
-    static constexpr int schemaVersion = 3;
+        message (see schema/bridge.schema.json SchemaVersion). v4 replaces
+        the fixed 3-pedal chainOrder with 6 generic slots (slots[] on
+        rigState, setSlotType/movePedal messages). */
+    static constexpr int schemaVersion = 4;
 
     /** Registers the valueChanged/gestureStart/gestureEnd listener for every
         param channel plus the loadNamModel/loadIr/requestRigState command
@@ -131,7 +148,8 @@ private:
     void handleLoadNamModel (const juce::var& event);
     void handleLoadIr (const juce::var& event);
     void handleRequestRigState (const juce::var& event);
-    void handleSetChainOrder (const juce::var& event);
+    void handleSetSlotType (const juce::var& event);
+    void handleMovePedal (const juce::var& event);
     void handleLoadPreset (const juce::var& event);
     void handleSavePresetAs (const juce::var& event);
     void handleSaveCurrentPreset (const juce::var& event);

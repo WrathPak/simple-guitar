@@ -30,11 +30,17 @@ add_executable(sg_tests
   engine/ScreamerTest.cpp
   engine/StereoDelayTest.cpp
   engine/PlateReverbTest.cpp
-  app/ChainOrderTest.cpp
+  engine/CompressorTest.cpp
+  engine/ChorusTest.cpp
+  engine/TremoloTest.cpp
+  app/PedalSlotsTest.cpp
+  app/StateMigrationTest.cpp
   app/BundledPresetsTest.cpp
   app/ContentInstallerTest.cpp
   ../app/source/PresetStore.cpp
   ../app/source/ContentInstallerCore.cpp
+  ../app/source/PedalSlots.cpp
+  ../app/source/StateMigration.cpp
 )
 
 target_link_libraries(sg_tests
@@ -43,9 +49,10 @@ target_link_libraries(sg_tests
     Catch2::Catch2WithMain
 )
 
-# app/ChainOrderTest.cpp exercises app/source/ChainOrder.h directly -- it's a
-# pure, JUCE-free header (packing/permutation-validation only), so this test
-# binary includes it straight from app/source/ rather than linking the whole
+# app/PedalSlotsTest.cpp and app/StateMigrationTest.cpp exercise
+# app/source/PedalSlots.{h,cpp} and app/source/StateMigration.{h,cpp}
+# directly -- neither pulls in JUCE UI/webview headers, so this test binary
+# includes/links them straight from app/source/ rather than linking the whole
 # app target (which pulls in juce_gui_extra/webview deps sg_tests has no
 # business depending on).
 target_include_directories(sg_tests PRIVATE

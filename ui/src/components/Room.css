@@ -62,3 +62,29 @@
 .room-focus-wrap > * {
   pointer-events: auto;
 }
+
+/* Focused pedal + its quiet remove action, stacked. */
+.room-focus-pedal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.room-focus-remove {
+  font-size: var(--label-size, 9.5px);
+  letter-spacing: var(--label-tracking, 0.18em);
+  text-transform: uppercase;
+  color: var(--text-low);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: none;
+  transition: color var(--camera-duration) var(--camera-ease);
+}
+
+.room-focus-remove:hover,
+.room-focus-remove:focus-visible {
+  color: var(--text-mid);
+  outline: none;
+}

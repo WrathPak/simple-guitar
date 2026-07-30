@@ -8,8 +8,10 @@ export {
   sendLoadNamModel,
   sendLoadIr,
   sendRequestRigState,
-  sendSetChainOrder,
-  isValidChainOrder,
+  sendSetSlotType,
+  sendMovePedal,
+  isValidSlotIndex,
+  isValidPedalType,
 } from "./rig";
 export {
   subscribePresetsState,
@@ -30,8 +32,7 @@ export type {
   LibraryEntry,
   LoadResult,
   LoadResultKind,
-  ChainOrder,
-  PedalId,
+  SlotState,
   PresetsState,
   PresetResult,
 } from "../../../schema/gen/ts/bridge";

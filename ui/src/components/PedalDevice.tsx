@@ -2,10 +2,10 @@ import type { CSSProperties, KeyboardEvent, MouseEvent } from "react";
 import type { ParamHandle } from "../bridge";
 import "./PedalDevice.css";
 import { Knob } from "./Knob";
-import type { PedalDef } from "./pedalDefs";
+import type { PedalTypeDef } from "./pedalDefs";
 
 export interface PedalDeviceProps {
-  pedal: PedalDef;
+  pedal: PedalTypeDef;
   bypassed: boolean;
   focused: boolean;
   onFocus?: () => void;
@@ -14,10 +14,10 @@ export interface PedalDeviceProps {
   onJackRef?: (which: "in" | "out", el: HTMLElement | null) => void;
   /** Shift+ArrowLeft/Right: swap this pedal with its neighbor in `direction`. */
   onSwap?: (direction: -1 | 1) => void;
-  /** Live param handles for the 3 knobs, same order as pedal.knobs. Only
-      used when focused -- the wide shot's knobs stay purely decorative
+  /** Live param handles, same order/length as pedal.knobs (3 or 4 per type).
+      Only used when focused -- the wide shot's knobs stay purely decorative
       (angle-only), same convention as AmpDevice/CabDevice. */
-  knobs?: [ParamHandle, ParamHandle, ParamHandle];
+  knobs?: ParamHandle[];
 }
 
 /** Family-colored stompbox: decorative knobs in the wide shot, interactive when focused. */

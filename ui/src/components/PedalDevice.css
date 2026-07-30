@@ -196,6 +196,28 @@
   box-shadow: 0 0 8px rgba(235, 150, 40, 0.9);
 }
 
+.pedal--dynamics {
+  background: linear-gradient(180deg, var(--family-dynamics-grad-a), var(--family-dynamics-grad-b));
+}
+.pedal--dynamics .pedal-name {
+  color: #dedee4;
+}
+.pedal--dynamics .pedal-led {
+  background: radial-gradient(circle at 40% 35%, #ffffff, var(--family-dynamics-led) 60%, #8a8a92);
+  box-shadow: 0 0 8px rgba(235, 235, 242, 0.85);
+}
+
+.pedal--mod {
+  background: linear-gradient(180deg, var(--family-modulation-grad-a), var(--family-modulation-grad-b));
+}
+.pedal--mod .pedal-name {
+  color: #d2e2ef;
+}
+.pedal--mod .pedal-led {
+  background: radial-gradient(circle at 40% 35%, #e0f2ff, var(--family-modulation-led) 60%, #2a6b96);
+  box-shadow: 0 0 8px rgba(120, 190, 245, 0.9);
+}
+
 .pedal--delay {
   background: linear-gradient(180deg, var(--family-delay-grad-a), var(--family-delay-grad-b));
 }

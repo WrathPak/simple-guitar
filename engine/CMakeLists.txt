@@ -122,6 +122,9 @@ add_library(sg_engine STATIC
     src/Screamer.cpp
     src/StereoDelay.cpp
     src/PlateReverb.cpp
+    src/Compressor.cpp
+    src/Chorus.cpp
+    src/Tremolo.cpp
 )
 
 target_include_directories(sg_engine

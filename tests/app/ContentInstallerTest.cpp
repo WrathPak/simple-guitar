@@ -3,7 +3,7 @@
 // copyIfAbsent() and rewritePresetPathsForThisMachine(). These are the two
 // decisions installBundledContent() actually makes; testing them directly
 // against a temp directory avoids needing the real embedded content zip or
-// a real Documents folder -- same spirit as ChainOrder.h/PresetStore.h being
+// a real Documents folder -- same spirit as PedalSlots.h/PresetStore.h being
 // factored out for their own filesystem-free/JUCE-free Catch2 tests.
 
 #include <catch2/catch_test_macros.hpp>

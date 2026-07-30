@@ -1,0 +1,61 @@
+.pedal-palette {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  padding: 8px;
+}
+
+.pedal-palette-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  background: none;
+  transition: background var(--camera-duration) var(--camera-ease);
+}
+
+.pedal-palette-tile:hover,
+.pedal-palette-tile:focus-visible {
+  background: rgba(255, 255, 255, 0.04);
+  outline: none;
+}
+
+/* A miniature of the floor pedals' anatomy: family-colored shell, dark inset
+   panel, footswitch dot. Family gradients come from PedalDevice.css's
+   `pedal--*` classes; only the geometry is redeclared at tile scale. */
+.pedal-palette-shell {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 52px;
+  height: 64px;
+  border-radius: 7px;
+  padding: 6px 6px 7px;
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.13), inset 0 -2px 5px rgba(0, 0, 0, 0.35);
+}
+
+.pedal-palette-panel {
+  height: 16px;
+  border-radius: 4px;
+  background: rgba(10, 10, 12, 0.82);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.65);
+}
+
+.pedal-palette-foot {
+  align-self: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 30%, #8f9096, #4d4e54 55%, #2a2b30);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.4);
+}
+
+.pedal-palette-name {
+  font-size: var(--label-size, 9.5px);
+  letter-spacing: var(--label-tracking, 0.18em);
+  text-transform: lowercase;
+  color: var(--text-mid);
+}

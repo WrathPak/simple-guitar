@@ -49,7 +49,7 @@
     has the two pure(r) helpers below, kept free of the BinaryData/ZipFile
     dependency specifically so they can be linked into the test binary (see
     tests/app/ContentInstallerTest.cpp) without pulling those in -- same
-    spirit as ChainOrder.h/PresetStore.h being factored out for their own
+    spirit as PedalSlots.h/PresetStore.h being factored out for their own
     Catch2 tests.
 */
 namespace sg

@@ -25,7 +25,7 @@
     RigLibrary) -- never call from the audio thread. The JSON (de)serializing
     functions (presetFileJsonFor/parsePresetFileJson) are pure string
     functions with no filesystem access, kept separate so they're directly
-    Catch2-testable; same spirit as ChainOrder.h being factored out for its
+    Catch2-testable; same spirit as PedalSlots.h being factored out for its
     own tests.
 */
 namespace sg

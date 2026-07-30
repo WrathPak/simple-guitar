@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { type ChainOrder, dragOverIndex, exceedsDragThreshold, moveInOrder, swapWithNeighbor } from "./chainOrder";
+import { type ChainOrder, dragOverIndex, exceedsDragThreshold } from "./chainOrder";
 import { isSpringSettled, PEDAL_SPRING, stepSpring, type SpringState } from "./spring";
 
 const FALLBACK_SLOT_STEP = 204; // pedal width (170) + row gap (34), used before anything has been measured
@@ -27,12 +27,14 @@ export interface ChainReorderApi {
 
 /**
  * Drives the floor's drag-to-reorder: pointer-drag a pedal horizontally,
- * neighbors shift aside live, release commits the new order. Keyboard
+ * neighbors shift aside live, release commits the move. Keyboard
  * Shift+Arrow swaps a pedal with its neighbor the same way. The committed
- * order itself lives with the caller (Room) — this hook only owns the
- * in-flight gesture and the settle animation.
+ * order itself lives with the caller (Room/the engine) — this hook only
+ * owns the in-flight gesture and the settle animation, and reports a
+ * commit as (from, to) indices into `order` (the caller maps those to
+ * slot indices for the movePedal message).
  */
-export function useChainReorder(order: ChainOrder, onCommit: (next: ChainOrder) => void): ChainReorderApi {
+export function useChainReorder(order: ChainOrder, onCommit: (fromIndex: number, toIndex: number) => void): ChainReorderApi {
   const orderRef = useRef(order);
   orderRef.current = order;
 
@@ -195,8 +197,8 @@ export function useChainReorder(order: ChainOrder, onCommit: (next: ChainOrder) 
 
     if (didDragRef.current) {
       const fromIndex = orderRef.current.indexOf(id);
-      const next = moveInOrder(orderRef.current, fromIndex, previewIndexRef.current);
-      if (next !== orderRef.current) onCommit(next);
+      const toIndex = previewIndexRef.current;
+      if (fromIndex !== -1 && fromIndex !== toIndex) onCommit(fromIndex, toIndex);
     }
 
     targetsRef.current.clear();
@@ -212,11 +214,12 @@ export function useChainReorder(order: ChainOrder, onCommit: (next: ChainOrder) 
   const onSwap = useCallback(
     (id: string, direction: -1 | 1) => {
       const current = orderRef.current;
-      const next = swapWithNeighbor(current, id, direction);
-      if (next === current) return;
+      const index = current.indexOf(id);
+      if (index === -1) return;
+      const neighborIndex = index + direction;
+      if (neighborIndex < 0 || neighborIndex >= current.length) return;
 
       const step = measureSlotStep();
-      const neighborIndex = current.indexOf(id) + direction;
       const neighborId = current[neighborIndex];
 
       springsRef.current.set(id, { x: direction * step, v: 0 });
@@ -224,7 +227,7 @@ export function useChainReorder(order: ChainOrder, onCommit: (next: ChainOrder) 
       targetsRef.current.set(id, 0);
       if (neighborId) targetsRef.current.set(neighborId, 0);
 
-      onCommit(next);
+      onCommit(index, neighborIndex);
       ensureLoopRunning();
     },
     [ensureLoopRunning, measureSlotStep, onCommit],

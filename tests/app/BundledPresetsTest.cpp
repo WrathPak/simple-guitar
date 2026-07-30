@@ -1,9 +1,13 @@
 // Validates every bundled factory preset (content/presets/*.sgpreset -- see
 // content/ATTRIBUTION.md) round-trips through PresetStore's own parser
 // (sg::parsePresetFileJson) and that the embedded APVTS state XML has the
-// shape PluginProcessor actually writes/reads: root tag "PARAMETERS", one
-// <PARAM id=".." value=".."/> child per known param id, and
-// namModelPath/irPath/chainOrder attributes on the root.
+// current (post-slot-architecture) shape PluginProcessor actually
+// writes/reads: root tag "PARAMETERS", one <PARAM id=".." value=".."/> child
+// per known param id (12 rig params + 36 slot params), and
+// namModelPath/irPath attributes on the root -- and NONE of the pre-slot
+// legacy pedal ids or chainOrder attribute, which would mean a bundled
+// preset regressed back to a format only sg::migrateStateXmlIfNeeded()
+// should ever have to deal with (see StateMigrationTest.cpp for that path).
 //
 // namModelPath/irPath specifically must be BARE FILENAMES as shipped in the
 // repo -- no path separators (either '/' or '\\'), no drive letters. Baking
@@ -31,9 +35,11 @@
 #include <juce_core/juce_core.h>
 
 #include "ContentInstaller.h"
+#include "PedalSlots.h"
 #include "PresetStore.h"
 
 #include <array>
+#include <cmath>
 #include <vector>
 
 #if !defined (SG_CONTENT_PRESETS_DIR) || !defined (SG_CONTENT_MODELS_DIR) || !defined (SG_CONTENT_IRS_DIR)
@@ -43,18 +49,27 @@
 
 namespace
 {
-    // Mirrors SimpleGuitarAudioProcessor::allParamIds (PluginProcessor.h) --
-    // duplicated rather than included, since pulling in PluginProcessor.h
-    // here would drag juce_audio_processors/juce_dsp/juce_gui_extra into a
-    // test binary that otherwise only needs juce_core (see PresetStore.h's
-    // own "message-thread only, pure JSON" design).
-    constexpr std::array<const char*, 24> kAllParamIds { {
+    // The 12 non-pedal rig param ids. Mirrors
+    // SimpleGuitarAudioProcessor::allParamIds' first 12 entries (duplicated
+    // rather than included, since pulling in PluginProcessor.h here would
+    // drag juce_audio_processors/juce_gui_extra into a test binary that
+    // otherwise only needs juce_core/juce_audio_basics -- see PresetStore.h's
+    // own "message-thread only, pure JSON" design). The 36 slot param ids
+    // are built from sg::slotParamId() (PedalSlots.h) instead of hand-
+    // duplicated, since that's the one place their naming scheme lives.
+    constexpr std::array<const char*, 12> kRigParamIds { {
         "outputGain", "gateOn", "gateThresholdDb", "ampInputDb", "ampBassDb",
         "ampMidDb", "ampTrebleDb", "ampPresenceDb", "namNormalize", "cabOn",
-        "cabLowCutHz", "cabHighCutHz", "screamerOn", "screamerDrive",
-        "screamerTone", "screamerLevel", "echoesOn", "echoesTime",
-        "echoesFeedback", "echoesMix", "chamberOn", "chamberDecay",
-        "chamberTone", "chamberMix"
+        "cabLowCutHz", "cabHighCutHz"
+    } };
+
+    // The 12 pre-slot-architecture legacy pedal param ids that must NEVER
+    // appear in a bundled preset again (see StateMigration.h/.cpp -- this is
+    // exactly the set it strips out of a legacy state).
+    constexpr std::array<const char*, 12> kLegacyPedalParamIds { {
+        "screamerOn", "screamerDrive", "screamerTone", "screamerLevel",
+        "echoesOn", "echoesTime", "echoesFeedback", "echoesMix",
+        "chamberOn", "chamberDecay", "chamberTone", "chamberMix"
     } };
 
     std::vector<juce::File> listBundledPresetFiles()
@@ -85,6 +100,15 @@ namespace
     {
         const auto baseName = sg::lastPathComponent (value);
         return baseName.isNotEmpty() && dir.getChildFile (baseName).existsAsFile();
+    }
+
+    int countParamChildren (const juce::XmlElement& root, const juce::String& id)
+    {
+        int count = 0;
+        for (auto* child : root.getChildIterator())
+            if (child->hasTagName ("PARAM") && child->getStringAttribute ("id") == id)
+                ++count;
+        return count;
     }
 }
 
@@ -118,21 +142,42 @@ TEST_CASE ("every bundled factory preset round-trips through PresetStore's parse
         REQUIRE (xml != nullptr);
         CHECK (xml->hasTagName ("PARAMETERS"));
 
-        for (auto* paramId : kAllParamIds)
+        for (auto* paramId : kRigParamIds)
         {
             INFO ("missing/duplicate param id: " << paramId);
-
-            int matchCount = 0;
-            for (auto* child : xml->getChildIterator())
-                if (child->hasTagName ("PARAM") && child->getStringAttribute ("id") == juce::String (paramId))
-                    ++matchCount;
-
-            CHECK (matchCount == 1);
+            CHECK (countParamChildren (*xml, paramId) == 1);
         }
+
+        for (int slot = 0; slot < sg::numSlots; ++slot)
+        {
+            CHECK (countParamChildren (*xml, sg::slotParamId (slot, "Type")) == 1);
+            CHECK (countParamChildren (*xml, sg::slotParamId (slot, "On")) == 1);
+            for (int p = 1; p <= sg::numParamsPerSlot; ++p)
+                CHECK (countParamChildren (*xml, sg::slotParamId (slot, "P" + juce::String (p))) == 1);
+
+            // The type value itself must be a valid pedal type (0..6).
+            for (auto* child : xml->getChildIterator())
+            {
+                if (child->hasTagName ("PARAM") && child->getStringAttribute ("id") == sg::slotParamId (slot, "Type"))
+                {
+                    const int typeValue = (int) std::lround (child->getDoubleAttribute ("value"));
+                    CHECK (sg::isValidPedalType (typeValue));
+                }
+            }
+        }
+
+        // No pre-slot-architecture leftovers -- a regression back to the
+        // legacy format is exactly what sg::migrateStateXmlIfNeeded() should
+        // be handling, never something bundled/shipped directly.
+        for (auto* legacyId : kLegacyPedalParamIds)
+        {
+            INFO ("legacy pedal param id present: " << legacyId);
+            CHECK (countParamChildren (*xml, legacyId) == 0);
+        }
+        CHECK_FALSE (xml->hasAttribute ("chainOrder"));
 
         REQUIRE (xml->hasAttribute ("namModelPath"));
         REQUIRE (xml->hasAttribute ("irPath"));
-        REQUIRE (xml->hasAttribute ("chainOrder"));
 
         const auto namModelPath = xml->getStringAttribute ("namModelPath");
         const auto irPath = xml->getStringAttribute ("irPath");
@@ -146,13 +191,5 @@ TEST_CASE ("every bundled factory preset round-trips through PresetStore's parse
 
         CHECK (fileExistsByBaseName (modelsDir, namModelPath));
         CHECK (fileExistsByBaseName (irsDir, irPath));
-
-        // chainOrder must be a comma-joined permutation of the three known
-        // pedal ids (see ChainOrder.h / PluginProcessor's pedalIdForSlot).
-        const auto chainOrderIds = juce::StringArray::fromTokens (xml->getStringAttribute ("chainOrder"), ",", "");
-        CHECK (chainOrderIds.size() == 3);
-        CHECK (chainOrderIds.contains ("screamer"));
-        CHECK (chainOrderIds.contains ("echoes"));
-        CHECK (chainOrderIds.contains ("chamber"));
     }
 }

@@ -18,7 +18,7 @@ function triggerPresetsState(
   act(() => {
     fake.trigger("presetsState", {
       type: "presetsState",
-      schemaVersion: 3,
+      schemaVersion: 4,
       current: null,
       dirty: false,
       presets: [],

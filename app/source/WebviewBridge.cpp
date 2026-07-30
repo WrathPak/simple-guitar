@@ -1,5 +1,6 @@
 #include "WebviewBridge.h"
 
+#include "PedalSlots.h"
 #include "RigLibrary.h"
 
 namespace
@@ -55,7 +56,8 @@ juce::WebBrowserComponent::Options WebviewBridge::attachListenersTo (juce::WebBr
     opts = opts.withEventListener (loadNamModelChannelId, [this] (const juce::var& event) { handleLoadNamModel (event); });
     opts = opts.withEventListener (loadIrChannelId, [this] (const juce::var& event) { handleLoadIr (event); });
     opts = opts.withEventListener (requestRigStateChannelId, [this] (const juce::var& event) { handleRequestRigState (event); });
-    opts = opts.withEventListener (setChainOrderChannelId, [this] (const juce::var& event) { handleSetChainOrder (event); });
+    opts = opts.withEventListener (setSlotTypeChannelId, [this] (const juce::var& event) { handleSetSlotType (event); });
+    opts = opts.withEventListener (movePedalChannelId, [this] (const juce::var& event) { handleMovePedal (event); });
     opts = opts.withEventListener (loadPresetChannelId, [this] (const juce::var& event) { handleLoadPreset (event); });
     opts = opts.withEventListener (savePresetAsChannelId, [this] (const juce::var& event) { handleSavePresetAs (event); });
     opts = opts.withEventListener (saveCurrentPresetChannelId, [this] (const juce::var& event) { handleSaveCurrentPreset (event); });
@@ -172,29 +174,42 @@ void WebviewBridge::handleRequestRigState (const juce::var&)
     sendRigState();
 }
 
-void WebviewBridge::handleSetChainOrder (const juce::var& event)
+void WebviewBridge::handleSetSlotType (const juce::var& event)
 {
     auto* obj = event.getDynamicObject();
     if (obj == nullptr)
         return;
 
-    const auto orderVar = obj->getProperty ("order");
-    if (! orderVar.isArray())
+    const auto slotVar = obj->getProperty ("slot");
+    const auto pedalTypeVar = obj->getProperty ("pedalType");
+
+    if (! (slotVar.isInt() || slotVar.isInt64() || slotVar.isDouble()))
+        return;
+    if (! (pedalTypeVar.isInt() || pedalTypeVar.isInt64() || pedalTypeVar.isDouble()))
         return;
 
-    const auto* orderArray = orderVar.getArray();
-    if (orderArray == nullptr || orderArray->size() != sg::numPedalSlots)
-        return; // malformed -- silently rejected, per the wire contract.
+    if (! processor.setSlotType ((int) slotVar, (int) pedalTypeVar))
+        return; // out of range -- silently rejected, per the wire contract.
 
-    sg::PedalOrder order {};
-    for (int i = 0; i < sg::numPedalSlots; ++i)
-    {
-        if (! SimpleGuitarAudioProcessor::pedalSlotForId ((*orderArray)[i].toString(), order[(std::size_t) i]))
-            return; // unknown pedal id -- silently rejected.
-    }
+    sendRigState();
+}
 
-    if (! processor.setChainOrder (order))
-        return; // not a permutation (e.g. a duplicate) -- silently rejected.
+void WebviewBridge::handleMovePedal (const juce::var& event)
+{
+    auto* obj = event.getDynamicObject();
+    if (obj == nullptr)
+        return;
+
+    const auto fromVar = obj->getProperty ("from");
+    const auto toVar = obj->getProperty ("to");
+
+    if (! (fromVar.isInt() || fromVar.isInt64() || fromVar.isDouble()))
+        return;
+    if (! (toVar.isInt() || toVar.isInt64() || toVar.isDouble()))
+        return;
+
+    if (! processor.movePedal ((int) fromVar, (int) toVar))
+        return; // out of range -- silently rejected, per the wire contract.
 
     sendRigState();
 }
@@ -303,9 +318,14 @@ void WebviewBridge::sendRigState()
     auto& nam = processor.getNam();
     auto& cab = processor.getCab();
 
-    juce::Array<juce::var> chainOrderArray;
-    for (auto slot : processor.getChainOrder())
-        chainOrderArray.add (juce::String (SimpleGuitarAudioProcessor::pedalIdForSlot (slot)));
+    juce::Array<juce::var> slotsArray;
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+    {
+        juce::DynamicObject::Ptr slotObj (new juce::DynamicObject());
+        slotObj->setProperty ("type", processor.getSlotType (slot));
+        slotObj->setProperty ("on", processor.getSlotOn (slot));
+        slotsArray.add (juce::var (slotObj.get()));
+    }
 
     juce::DynamicObject::Ptr obj (new juce::DynamicObject());
     obj->setProperty (typeKey, "rigState");
@@ -313,7 +333,7 @@ void WebviewBridge::sendRigState()
     obj->setProperty ("namModelName", nam.isLoaded() ? juce::var (nam.getModelName()) : juce::var());
     obj->setProperty ("namModelSampleRate", nam.getModelSampleRate());
     obj->setProperty ("irName", cab.isLoaded() ? juce::var (cab.getIrName()) : juce::var());
-    obj->setProperty ("chainOrder", juce::var (chainOrderArray));
+    obj->setProperty ("slots", juce::var (slotsArray));
     obj->setProperty ("library", juce::var (libraryObj.get()));
 
     browser->emitEventIfBrowserIsVisible (rigStateChannelId, obj.get());

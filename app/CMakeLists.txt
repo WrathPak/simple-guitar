@@ -142,6 +142,8 @@ target_sources(SimpleGuitar
         source/PresetStore.cpp
         source/ContentInstaller.cpp
         source/ContentInstallerCore.cpp
+        source/PedalSlots.cpp
+        source/StateMigration.cpp
 )
 
 target_compile_definitions(SimpleGuitar

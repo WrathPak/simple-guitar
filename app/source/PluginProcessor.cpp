@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 
 #include "ContentInstaller.h"
+#include "StateMigration.h"
 
 #include <algorithm>
 #include <cmath>
@@ -28,36 +29,19 @@ namespace
             });
     }
 
-    // Chain-order <-> apvts.state property text, e.g. "screamer,echoes,chamber".
-    // Same spirit as namModelPath/irPath: a plain comma-joined string property
-    // on apvts.state, restored via restoreLoadedPathsFromState().
-    juce::String chainOrderToString (const sg::PedalOrder& order)
+    // Display names for the slot{N}Type AudioParameterChoice -- order must
+    // match sg::PedalType exactly (index == the enum's underlying value).
+    const juce::StringArray& pedalTypeChoiceNames()
     {
-        juce::StringArray ids;
-        for (auto slot : order)
-            ids.add (SimpleGuitarAudioProcessor::pedalIdForSlot (slot));
-        return ids.joinIntoString (",");
+        static const juce::StringArray names { "Empty", "Screamer", "Echoes", "Chamber", "Squeeze", "Wobble", "Shiver" };
+        return names;
     }
 
-    bool parseChainOrderString (const juce::String& text, sg::PedalOrder& outOrder)
-    {
-        const auto ids = juce::StringArray::fromTokens (text, ",", "");
-        if (ids.size() != sg::numPedalSlots)
-            return false;
-
-        sg::PedalOrder order {};
-        for (int i = 0; i < sg::numPedalSlots; ++i)
-        {
-            if (! SimpleGuitarAudioProcessor::pedalSlotForId (ids[i], order[(std::size_t) i]))
-                return false;
-        }
-
-        if (! sg::isValidPedalOrder (order))
-            return false;
-
-        outOrder = order;
-        return true;
-    }
+    // Default slot occupants on a fresh install: the old fixed trio filling
+    // the first three physical slots (screamer, echoes, chamber), the rest
+    // empty. On/P1-4 defaults are flat/uniform across every slot regardless
+    // of type (true / 0.5) -- set directly in createParameterLayout() below.
+    constexpr std::array<int, sg::numSlots> defaultSlotTypes { { 1, 2, 3, 0, 0, 0 } };
 }
 
 SimpleGuitarAudioProcessor::SimpleGuitarAudioProcessor()
@@ -78,18 +62,18 @@ SimpleGuitarAudioProcessor::SimpleGuitarAudioProcessor()
     cabOnParam = apvts.getRawParameterValue (cabOnParamId);
     cabLowCutHzParam = apvts.getRawParameterValue (cabLowCutHzParamId);
     cabHighCutHzParam = apvts.getRawParameterValue (cabHighCutHzParamId);
-    screamerOnParam = apvts.getRawParameterValue (screamerOnParamId);
-    screamerDriveParam = apvts.getRawParameterValue (screamerDriveParamId);
-    screamerToneParam = apvts.getRawParameterValue (screamerToneParamId);
-    screamerLevelParam = apvts.getRawParameterValue (screamerLevelParamId);
-    echoesOnParam = apvts.getRawParameterValue (echoesOnParamId);
-    echoesTimeParam = apvts.getRawParameterValue (echoesTimeParamId);
-    echoesFeedbackParam = apvts.getRawParameterValue (echoesFeedbackParamId);
-    echoesMixParam = apvts.getRawParameterValue (echoesMixParamId);
-    chamberOnParam = apvts.getRawParameterValue (chamberOnParamId);
-    chamberDecayParam = apvts.getRawParameterValue (chamberDecayParamId);
-    chamberToneParam = apvts.getRawParameterValue (chamberToneParamId);
-    chamberMixParam = apvts.getRawParameterValue (chamberMixParamId);
+
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+    {
+        slotTypeParams[(std::size_t) slot] = apvts.getRawParameterValue (sg::slotParamId (slot, "Type"));
+        slotOnParams[(std::size_t) slot] = apvts.getRawParameterValue (sg::slotParamId (slot, "On"));
+
+        for (int p = 0; p < sg::numParamsPerSlot; ++p)
+            slotPParams[(std::size_t) slot][(std::size_t) p] =
+                apvts.getRawParameterValue (sg::slotParamId (slot, "P" + juce::String (p + 1)));
+    }
+
+    lastKnownSlotType.fill (-1);
 
     // Message-thread work: make sure the managed library folders exist from
     // the moment the plugin is instantiated, so the first rigState/
@@ -197,79 +181,35 @@ juce::AudioProcessorValueTreeState::ParameterLayout SimpleGuitarAudioProcessor::
         8000.0f,
         juce::AudioParameterFloatAttributes().withLabel ("Hz")));
 
-    // Floor pedals. The nine continuous params below are plain 0..1
-    // normalized floats end to end -- no dB/Hz range like the M1 rig params
-    // above, since sg::Screamer/StereoDelay/PlateReverb take normalized
-    // setters directly and own the real-unit mapping internally (see
-    // engine/include/sg/{Screamer,StereoDelay,PlateReverb}.h).
-    params.push_back (std::make_unique<juce::AudioParameterBool> (
-        juce::ParameterID { screamerOnParamId, 1 },
-        "Screamer",
-        false));
+    // Pedal slots: 6 generic slots, each a {type, on, P1..P4} group. Type is
+    // a 7-way choice (0 empty .. 6 shiver, see sg::PedalType); On/P1-4 are
+    // flat-default (true / 0.5) regardless of type -- a slot's DSP instance
+    // (built on the message thread, see PedalSlots.h/PluginProcessor's
+    // applySlotTypeIfChanged()) owns the actual per-type real-unit mapping.
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+    {
+        const juce::String slotLabel = "Slot " + juce::String (slot + 1);
 
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { screamerDriveParamId, 1 },
-        "Screamer Drive",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-        0.5f));
+        params.push_back (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { sg::slotParamId (slot, "Type"), 1 },
+            slotLabel + " Type",
+            pedalTypeChoiceNames(),
+            defaultSlotTypes[(std::size_t) slot]));
 
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { screamerToneParamId, 1 },
-        "Screamer Tone",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-        0.5f));
+        params.push_back (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { sg::slotParamId (slot, "On"), 1 },
+            slotLabel + " On",
+            true));
 
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { screamerLevelParamId, 1 },
-        "Screamer Level",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-        0.7f));
-
-    params.push_back (std::make_unique<juce::AudioParameterBool> (
-        juce::ParameterID { echoesOnParamId, 1 },
-        "Echoes",
-        true));
-
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { echoesTimeParamId, 1 },
-        "Echoes Time",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-        0.5f));
-
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { echoesFeedbackParamId, 1 },
-        "Echoes Feedback",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-        0.4f));
-
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { echoesMixParamId, 1 },
-        "Echoes Mix",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-        0.25f));
-
-    params.push_back (std::make_unique<juce::AudioParameterBool> (
-        juce::ParameterID { chamberOnParamId, 1 },
-        "Chamber",
-        true));
-
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { chamberDecayParamId, 1 },
-        "Chamber Decay",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-        0.5f));
-
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { chamberToneParamId, 1 },
-        "Chamber Tone",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-        0.5f));
-
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { chamberMixParamId, 1 },
-        "Chamber Mix",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-        0.22f));
+        for (int p = 1; p <= sg::numParamsPerSlot; ++p)
+        {
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { sg::slotParamId (slot, "P" + juce::String (p)), 1 },
+                slotLabel + " P" + juce::String (p),
+                juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+                0.5f));
+        }
+    }
 
     return { params.begin(), params.end() };
 }
@@ -278,19 +218,31 @@ void SimpleGuitarAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
 {
     const auto numChannels = getTotalNumOutputChannels();
 
+    preparedSampleRate = sampleRate;
+    preparedBlockSize = samplesPerBlock;
+    preparedNumChannels = numChannels;
+
     inputTrimGain.prepare (sampleRate, samplesPerBlock, numChannels);
     gate.prepare (sampleRate, samplesPerBlock, numChannels);
-    screamer.prepare (sampleRate, samplesPerBlock, numChannels);
-    echoes.prepare (sampleRate, samplesPerBlock, numChannels);
-    chamber.prepare (sampleRate, samplesPerBlock, numChannels);
+
+    std::array<sg::PedalType, sg::numSlots> types {};
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+    {
+        const int raw = getSlotType (slot);
+        types[(std::size_t) slot] = (sg::PedalType) raw;
+        lastKnownSlotType[(std::size_t) slot] = raw;
+    }
+    slotHost.prepare (sampleRate, samplesPerBlock, numChannels, types);
+    slotHostPrepared = true;
+
     nam.prepare (sampleRate, samplesPerBlock);
     postEq.prepare (sampleRate, samplesPerBlock, numChannels);
     cab.prepare (sampleRate, samplesPerBlock, numChannels);
     outputGainStage.prepare (sampleRate, samplesPerBlock, numChannels);
     meterTap.reset();
 
-    // Screamer's latency (getLatencySamples()) is only valid once prepare()
-    // has run; refresh the reported host latency now that it is.
+    // Screamer-type slots' latency (getLatencySamples()) is only valid once
+    // prepare() has run; refresh the reported host latency now that it is.
     updateReportedLatency();
 }
 
@@ -334,13 +286,20 @@ void SimpleGuitarAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     gate.setThresholdDb (gateThresholdDbParam->load (std::memory_order_relaxed));
     gate.process (buffer);
 
-    // 2.5. Floor pedals, in the current chain order. A single relaxed atomic
-    // load of the packed order, then a fixed-size loop -- glitch-free,
-    // allocation-free reordering (see ChainOrder.h / PluginProcessor.h).
+    // 2.5. Pedal slots, in slot-index order -- slot index IS signal order
+    // now (see PluginProcessor.h's class-level comment); no separate chain-
+    // order concept. Each slot reads its own on/off + four knob atomics and
+    // hands them to PedalSlotHost, which drives whichever DSP instance is
+    // (or is mid-crossfade into being) live for that slot.
+    for (int slot = 0; slot < sg::numSlots; ++slot)
     {
-        const auto order = getChainOrder();
-        for (auto slot : order)
-            processPedalSlot (slot, buffer);
+        const bool on = slotOnParams[(std::size_t) slot]->load (std::memory_order_relaxed) >= 0.5f;
+
+        std::array<float, sg::numParamsPerSlot> slotParams {};
+        for (int p = 0; p < sg::numParamsPerSlot; ++p)
+            slotParams[(std::size_t) p] = slotPParams[(std::size_t) slot][(std::size_t) p]->load (std::memory_order_relaxed);
+
+        slotHost.processSlot (slot, on, slotParams, buffer);
     }
 
     // 3. NAM amp.
@@ -371,61 +330,186 @@ void SimpleGuitarAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     meterTap.pushBlock (buffer.getArrayOfReadPointers(), buffer.getNumChannels(), buffer.getNumSamples());
 }
 
-void SimpleGuitarAudioProcessor::processPedalSlot (sg::PedalSlot slot, juce::AudioBuffer<float>& buffer) noexcept
+int SimpleGuitarAudioProcessor::getSlotType (int slot) const noexcept
 {
-    switch (slot)
+    if (! sg::isValidSlotIndex (slot))
+        return 0;
+
+    const int raw = (int) std::lround (slotTypeParams[(std::size_t) slot]->load (std::memory_order_relaxed));
+    return juce::jlimit (0, sg::numPedalTypes - 1, raw);
+}
+
+bool SimpleGuitarAudioProcessor::getSlotOn (int slot) const noexcept
+{
+    if (! sg::isValidSlotIndex (slot))
+        return false;
+
+    return slotOnParams[(std::size_t) slot]->load (std::memory_order_relaxed) >= 0.5f;
+}
+
+void SimpleGuitarAudioProcessor::applySlotTypeIfChanged (int slot)
+{
+    jassert (sg::isValidSlotIndex (slot));
+
+    const int currentType = getSlotType (slot);
+    if (currentType == lastKnownSlotType[(std::size_t) slot])
+        return;
+
+    lastKnownSlotType[(std::size_t) slot] = currentType;
+
+    if (! slotHostPrepared)
+        return; // nothing to rebuild yet -- prepareToPlay()'s own initial build already uses the current values.
+
+    auto retired = slotHost.swapSlot (slot, (sg::PedalType) currentType,
+                                       preparedSampleRate, preparedBlockSize, preparedNumChannels);
+
+    retiringPedals.push_back ({ std::move (retired), juce::Time::getMillisecondCounter() });
+}
+
+void SimpleGuitarAudioProcessor::syncAllSlotInstancesFromParams()
+{
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+        applySlotTypeIfChanged (slot);
+}
+
+void SimpleGuitarAudioProcessor::collectRetiredPedals()
+{
+    const auto now = juce::Time::getMillisecondCounter();
+
+    retiringPedals.erase (
+        std::remove_if (retiringPedals.begin(), retiringPedals.end(),
+            [now] (const RetiringPedal& r) { return (now - r.retiredAtMs) >= retireGraceMs; }),
+        retiringPedals.end());
+}
+
+bool SimpleGuitarAudioProcessor::setSlotType (int slot, int pedalType)
+{
+    if (! sg::isValidSlotIndex (slot) || ! sg::isValidPedalType (pedalType))
+        return false;
+
+    auto* typeParam = apvts.getParameter (sg::slotParamId (slot, "Type"));
+    auto* onParam = apvts.getParameter (sg::slotParamId (slot, "On"));
+    auto* p1Param = apvts.getParameter (sg::slotParamId (slot, "P1"));
+    auto* p2Param = apvts.getParameter (sg::slotParamId (slot, "P2"));
+    auto* p3Param = apvts.getParameter (sg::slotParamId (slot, "P3"));
+    auto* p4Param = apvts.getParameter (sg::slotParamId (slot, "P4"));
+
+    if (typeParam == nullptr || onParam == nullptr
+        || p1Param == nullptr || p2Param == nullptr || p3Param == nullptr || p4Param == nullptr)
+        return false; // shouldn't happen -- defensive only
+
+    // A genuine "pick a new pedal for this slot" gesture resets On/P1-4 to
+    // their flat defaults -- see the class-level comment in PluginProcessor.h.
+    typeParam->setValueNotifyingHost (typeParam->convertTo0to1 ((float) pedalType));
+    onParam->setValueNotifyingHost (onParam->convertTo0to1 (1.0f));
+    p1Param->setValueNotifyingHost (p1Param->convertTo0to1 (0.5f));
+    p2Param->setValueNotifyingHost (p2Param->convertTo0to1 (0.5f));
+    p3Param->setValueNotifyingHost (p3Param->convertTo0to1 (0.5f));
+    p4Param->setValueNotifyingHost (p4Param->convertTo0to1 (0.5f));
+
+    applySlotTypeIfChanged (slot);
+
+    presetDirty.store (true, std::memory_order_relaxed);
+    return true;
+}
+
+bool SimpleGuitarAudioProcessor::movePedal (int from, int to)
+{
+    if (! sg::isValidSlotIndex (from) || ! sg::isValidSlotIndex (to))
+        return false;
+
+    if (from == to)
+        return true; // harmless no-op
+
+    struct SlotValues
     {
-        case sg::PedalSlot::screamer:
-            screamer.setEnabled (screamerOnParam->load (std::memory_order_relaxed) >= 0.5f);
-            screamer.setDrive (screamerDriveParam->load (std::memory_order_relaxed));
-            screamer.setTone (screamerToneParam->load (std::memory_order_relaxed));
-            screamer.setLevel (screamerLevelParam->load (std::memory_order_relaxed));
-            screamer.process (buffer);
-            break;
+        float type, on, p1, p2, p3, p4;
+    };
 
-        case sg::PedalSlot::echoes:
-            echoes.setEnabled (echoesOnParam->load (std::memory_order_relaxed) >= 0.5f);
-            echoes.setTime (echoesTimeParam->load (std::memory_order_relaxed));
-            echoes.setFeedback (echoesFeedbackParam->load (std::memory_order_relaxed));
-            echoes.setMix (echoesMixParam->load (std::memory_order_relaxed));
-            echoes.process (buffer);
-            break;
+    std::array<SlotValues, sg::numSlots> snapshot {};
 
-        case sg::PedalSlot::chamber:
-            chamber.setEnabled (chamberOnParam->load (std::memory_order_relaxed) >= 0.5f);
-            chamber.setDecay (chamberDecayParam->load (std::memory_order_relaxed));
-            chamber.setTone (chamberToneParam->load (std::memory_order_relaxed));
-            chamber.setMix (chamberMixParam->load (std::memory_order_relaxed));
-            chamber.process (buffer);
-            break;
+    for (int i = 0; i < sg::numSlots; ++i)
+    {
+        snapshot[(std::size_t) i].type = slotTypeParams[(std::size_t) i]->load (std::memory_order_relaxed);
+        snapshot[(std::size_t) i].on = slotOnParams[(std::size_t) i]->load (std::memory_order_relaxed);
+        snapshot[(std::size_t) i].p1 = slotPParams[(std::size_t) i][0]->load (std::memory_order_relaxed);
+        snapshot[(std::size_t) i].p2 = slotPParams[(std::size_t) i][1]->load (std::memory_order_relaxed);
+        snapshot[(std::size_t) i].p3 = slotPParams[(std::size_t) i][2]->load (std::memory_order_relaxed);
+        snapshot[(std::size_t) i].p4 = slotPParams[(std::size_t) i][3]->load (std::memory_order_relaxed);
     }
+
+    const auto perm = sg::computeMovePermutation (from, to);
+
+    for (int i = 0; i < sg::numSlots; ++i)
+    {
+        const auto& src = snapshot[(std::size_t) perm[(std::size_t) i]];
+
+        auto* typeParam = apvts.getParameter (sg::slotParamId (i, "Type"));
+        auto* onParam = apvts.getParameter (sg::slotParamId (i, "On"));
+        auto* p1Param = apvts.getParameter (sg::slotParamId (i, "P1"));
+        auto* p2Param = apvts.getParameter (sg::slotParamId (i, "P2"));
+        auto* p3Param = apvts.getParameter (sg::slotParamId (i, "P3"));
+        auto* p4Param = apvts.getParameter (sg::slotParamId (i, "P4"));
+
+        if (typeParam == nullptr || onParam == nullptr
+            || p1Param == nullptr || p2Param == nullptr || p3Param == nullptr || p4Param == nullptr)
+            continue; // shouldn't happen -- defensive only
+
+        // movePedal moves param VALUES, not DSP instances -- On/P1-4 travel
+        // with the pedal unchanged (unlike setSlotType(), which resets them).
+        typeParam->setValueNotifyingHost (typeParam->convertTo0to1 (src.type));
+        onParam->setValueNotifyingHost (onParam->convertTo0to1 (src.on));
+        p1Param->setValueNotifyingHost (p1Param->convertTo0to1 (src.p1));
+        p2Param->setValueNotifyingHost (p2Param->convertTo0to1 (src.p2));
+        p3Param->setValueNotifyingHost (p3Param->convertTo0to1 (src.p3));
+        p4Param->setValueNotifyingHost (p4Param->convertTo0to1 (src.p4));
+    }
+
+    // Rebuild whichever slots' TYPE value actually ended up different --
+    // no-op for any slot whose type happened to land back on itself.
+    for (int i = 0; i < sg::numSlots; ++i)
+        applySlotTypeIfChanged (i);
+
+    presetDirty.store (true, std::memory_order_relaxed);
+    return true;
 }
 
 void SimpleGuitarAudioProcessor::updateReportedLatency()
 {
-    // Screamer is the only pedal that adds latency (fixed once prepare() has
-    // run); its contribution is order-independent (serial-chain latencies
-    // just sum), so this doesn't need to know the current chain order, only
-    // whether it's switched on.
-    const bool screamerOn = screamerOnParam->load (std::memory_order_relaxed) >= 0.5f;
-    const int newLatency = screamerOn ? screamer.getLatencySamples() : 0;
+    // Only screamer-type slots contribute latency (their internal 2x
+    // oversampling; see engine/include/sg/Screamer.h); every other type
+    // (including empty) reports 0 from PedalInstance::getLatencySamples().
+    // A bypassed (off) slot contributes nothing either, matching the old
+    // single-screamer contract: bypass is a bit-exact passthrough, not an
+    // actually-delayed signal, so reporting host PDC latency for it would be
+    // wrong. Order-independent (serial-chain latencies just sum), so this
+    // doesn't need to know slot order beyond "sum all six".
+    int total = 0;
+    for (int slot = 0; slot < sg::numSlots; ++slot)
+        total += slotHost.getReportedLatencySamples (slot, getSlotOn (slot));
 
-    if (newLatency != getLatencySamples())
-        setLatencySamples (newLatency);
+    if (total != getLatencySamples())
+        setLatencySamples (total);
 }
 
 void SimpleGuitarAudioProcessor::timerCallback()
 {
-    // Low-rate message-thread poll for screamerOn changes -- see the
-    // class-level comment in PluginProcessor.h for why this can't be a
-    // parameter listener (JUCE may invoke those from the audio thread for
-    // host automation) and must instead be a message-thread refresh that
-    // works whether or not an editor/WebviewBridge exists.
+    // Low-rate message-thread poll -- see the class-level comment in
+    // PluginProcessor.h for why none of this can be a parameter listener
+    // (JUCE may invoke those from the audio thread for host automation) and
+    // must instead be a message-thread refresh that works whether or not an
+    // editor/WebviewBridge exists.
     updateReportedLatency();
-
-    // Same reasoning drives dirty-tracking's param-change detection: a
-    // low-rate message-thread poll rather than a parameter listener.
     pollForDirtyParamChange();
+
+    // Backstop for a slot{N}Type param changed by host automation directly
+    // (setSlotType()/movePedal() already applied their own changes
+    // synchronously above, so this is a no-op for those).
+    syncAllSlotInstancesFromParams();
+
+    // Deferred deletion of any pedal instance retired by a slot swap whose
+    // grace period has now elapsed (never on the audio thread).
+    collectRetiredPedals();
 }
 
 void SimpleGuitarAudioProcessor::pollForDirtyParamChange()
@@ -456,44 +540,6 @@ void SimpleGuitarAudioProcessor::refreshDirtyBaseline()
     }
 
     presetDirty.store (false, std::memory_order_relaxed);
-}
-
-bool SimpleGuitarAudioProcessor::setChainOrder (const sg::PedalOrder& order)
-{
-    if (! sg::storePedalOrder (chainOrderAtomic, order))
-        return false;
-
-    apvts.state.setProperty (chainOrderPropertyId, chainOrderToString (order), nullptr);
-
-    // setChainOrder() is only ever called from a genuine user-driven
-    // reorder (WebviewBridge::handleSetChainOrder) -- restoring a persisted
-    // order (restoreLoadedPathsFromState()) writes the atomic directly and
-    // never calls this, so there's no restore-vs-user ambiguity to guard
-    // against here, unlike the nam/ir loaders above.
-    presetDirty.store (true, std::memory_order_relaxed);
-    return true;
-}
-
-const char* SimpleGuitarAudioProcessor::pedalIdForSlot (sg::PedalSlot slot) noexcept
-{
-    switch (slot)
-    {
-        case sg::PedalSlot::screamer: return "screamer";
-        case sg::PedalSlot::echoes:   return "echoes";
-        case sg::PedalSlot::chamber:  return "chamber";
-    }
-    return "screamer";
-}
-
-bool SimpleGuitarAudioProcessor::pedalSlotForId (juce::StringRef id, sg::PedalSlot& outSlot) noexcept
-{
-    const juce::String idString (id);
-
-    if (idString == "screamer") { outSlot = sg::PedalSlot::screamer; return true; }
-    if (idString == "echoes")   { outSlot = sg::PedalSlot::echoes; return true; }
-    if (idString == "chamber")  { outSlot = sg::PedalSlot::chamber; return true; }
-
-    return false;
 }
 
 juce::AudioProcessorEditor* SimpleGuitarAudioProcessor::createEditor()
@@ -625,10 +671,15 @@ void SimpleGuitarAudioProcessor::setStateInformation (const void* data, int size
 {
     const std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
 
-    if (xmlState != nullptr && xmlState->hasTagName (apvts.state.getType()))
-        apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
-    else
+    if (xmlState == nullptr || ! xmlState->hasTagName (apvts.state.getType()))
         return;
+
+    // Transparently upgrades a pre-slot-architecture state (fixed screamer/
+    // echoes/chamber params + chainOrder attribute) into the current slot-
+    // param shape; a no-op clone for an already-current-format state (see
+    // StateMigration.h).
+    auto migrated = sg::migrateStateXmlIfNeeded (*xmlState);
+    apvts.replaceState (juce::ValueTree::fromXml (*migrated));
 
     // The host can call setStateInformation from threads other than the
     // message thread (e.g. during project load); requestLoad on the engine
@@ -661,16 +712,11 @@ void SimpleGuitarAudioProcessor::restoreLoadedPathsFromState()
     if (irPath.isNotEmpty() && irPath != currentIrPath)
         requestLoadIrInternal (irPath, nullptr, true);
 
-    // Chain order: the state tree already carries the persisted value
-    // verbatim (it just came in via apvts.replaceState()), so this only
-    // needs to update the audio-thread-visible atomic, not re-persist it.
-    // An empty/missing/corrupt property leaves the atomic at whatever it
-    // already was (the default template order, for a first load).
-    const auto chainOrderText = apvts.state.getProperty (chainOrderPropertyId, "").toString();
-    sg::PedalOrder restoredOrder {};
-
-    if (chainOrderText.isNotEmpty() && parseChainOrderString (chainOrderText, restoredOrder))
-        sg::storePedalOrder (chainOrderAtomic, restoredOrder);
+    // Pedal slots: the state tree already carries the persisted (or, for a
+    // legacy state, migrated -- see StateMigration.h) slot param values
+    // verbatim (they just came in via apvts.replaceState()); this only
+    // needs to rebuild whichever slots' DSP instances no longer match.
+    syncAllSlotInstancesFromParams();
 
     // Current preset bookkeeping: plain string properties, no filesystem
     // access needed to "restore" them (unlike nam/ir, which must re-run the
@@ -777,6 +823,10 @@ bool SimpleGuitarAudioProcessor::loadPreset (const juce::String& path, juce::Str
         return false;
     }
 
+    // Transparently upgrades a legacy-format preset (see StateMigration.h);
+    // a no-op clone for an already-current-format preset.
+    auto migrated = sg::migrateStateXmlIfNeeded (*xml);
+
     // Same restore path setStateInformation uses (apvts.replaceState() +
     // restoreLoadedPathsFromState()), called directly/synchronously rather
     // than marshaled via MessageManager::callAsync -- loadPreset() is
@@ -784,7 +834,7 @@ bool SimpleGuitarAudioProcessor::loadPreset (const juce::String& path, juce::Str
     // host may call from any thread), so there's no cross-thread hazard to
     // guard against here, and a synchronous restore means the presetsState
     // WebviewBridge sends right after this returns is already accurate.
-    apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    apvts.replaceState (juce::ValueTree::fromXml (*migrated));
     restoreLoadedPathsFromState();
 
     // Restoring this preset's own saved paths above just set

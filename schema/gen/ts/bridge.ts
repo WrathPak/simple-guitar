@@ -6,7 +6,7 @@
  */
 
 /**
- * Simple Guitar C++ <-> React bridge protocol, v3. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
+ * Simple Guitar C++ <-> React bridge protocol, v4. This schema is the single source of truth for the message layer: any new UI<->engine capability starts with a change here, and TypeScript types are generated from it (schema/gen-types.mjs -> schema/gen/ts/bridge.ts). Never hand-write the TS types.
  *
  * Union of every message that can cross the bridge in either direction, discriminated by the `type` field.
  */
@@ -19,7 +19,8 @@ export type UiToEngineMessage =
   | LoadNamModel
   | LoadIr
   | RequestRigState
-  | SetChainOrder
+  | SetSlotType
+  | MovePedal
   | LoadPreset
   | SavePresetAs
   | SaveCurrentPreset
@@ -27,7 +28,7 @@ export type UiToEngineMessage =
   | PrevPreset
   | RequestPresets;
 /**
- * Identifiers for host-automatable parameters exposed by the engine's APVTS. M1 adds the gate/amp/cab rig params; M2 adds the three floor pedals (screamer/echoes/chamber). New params are added here first.
+ * Identifiers for host-automatable parameters exposed by the engine's APVTS. M1 adds the gate/amp/cab rig params. M2 wave 3 adds 6 generic pedal slots (slot0..slot5), each a {Type, On, P1, P2, P3, P4} group (36 ids total), replacing the old fixed screamer/echoes/chamber ids. New params are added here first.
  */
 export type ParamId =
   | "outputGain"
@@ -42,33 +43,54 @@ export type ParamId =
   | "cabOn"
   | "cabLowCutHz"
   | "cabHighCutHz"
-  | "screamerOn"
-  | "screamerDrive"
-  | "screamerTone"
-  | "screamerLevel"
-  | "echoesOn"
-  | "echoesTime"
-  | "echoesFeedback"
-  | "echoesMix"
-  | "chamberOn"
-  | "chamberDecay"
-  | "chamberTone"
-  | "chamberMix";
+  | "slot0Type"
+  | "slot0On"
+  | "slot0P1"
+  | "slot0P2"
+  | "slot0P3"
+  | "slot0P4"
+  | "slot1Type"
+  | "slot1On"
+  | "slot1P1"
+  | "slot1P2"
+  | "slot1P3"
+  | "slot1P4"
+  | "slot2Type"
+  | "slot2On"
+  | "slot2P1"
+  | "slot2P2"
+  | "slot2P3"
+  | "slot2P4"
+  | "slot3Type"
+  | "slot3On"
+  | "slot3P1"
+  | "slot3P2"
+  | "slot3P3"
+  | "slot3P4"
+  | "slot4Type"
+  | "slot4On"
+  | "slot4P1"
+  | "slot4P2"
+  | "slot4P3"
+  | "slot4P4"
+  | "slot5Type"
+  | "slot5On"
+  | "slot5P1"
+  | "slot5P2"
+  | "slot5P3"
+  | "slot5P4";
 /**
  * A parameter value normalized to the JUCE APVTS convention of 0..1, regardless of the parameter's real-world range/units (e.g. outputGain's underlying range is -60..+12 dB). The engine owns the mapping in both directions.
  */
 export type NormalizedParamValue = number;
 /**
- * The floor pedals' left-to-right / signal order: a permutation of all three PedalIds, no duplicates, no omissions.
- *
- * @minItems 3
- * @maxItems 3
+ * A pedal slot index, 0..5. Slot index IS signal order (slot 0 is first in the signal path, right after the noise gate; slot 5 feeds the NAM amp) -- there is no separate chain-order concept.
  */
-export type ChainOrder = [PedalId, PedalId, PedalId];
+export type SlotIndex = number;
 /**
- * Identifiers for the three floor pedals, used only for chain ordering (each pedal's own on/off + knob params are ParamIds above). Order matters: index 0 is first in the signal path (closest to the input trim/gate), index 2 feeds the NAM amp.
+ * Identifies what pedal (if any) occupies a slot: 0 empty, 1 screamer, 2 echoes, 3 chamber, 4 squeeze, 5 wobble, 6 shiver. Matches the raw value of the engine's slot{N}Type AudioParameterChoice exactly.
  */
-export type PedalId = "screamer" | "echoes" | "chamber";
+export type PedalTypeId = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 /**
  * Union of every message the C++ engine may send to the React UI.
  */
@@ -78,9 +100,9 @@ export type EngineToUiMessage = MeterFrame | StateChanged | RigState | LoadResul
  */
 export type DecibelValue = number;
 /**
- * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing. M2 wave 2 bumps 2 -> 3 for the preset message set (loadPreset/savePresetAs/saveCurrentPreset/nextPreset/prevPreset/requestPresets/presetsState/presetResult).
+ * Bridge protocol version. Bump this whenever a breaking change is made to any message shape in this file; engine and UI both check it on stateChanged so a stale webview bundle fails loudly instead of silently desyncing. M2 wave 3 bumps 3 -> 4: the fixed 3-pedal chainOrder is replaced by 6 generic pedal slots (slot0Type..slot5P4 ParamIds; setSlotType/movePedal messages; rigState.slots replaces rigState.chainOrder).
  */
-export type SchemaVersion = 3;
+export type SchemaVersion = 4;
 /**
  * Which loader a loadResult reports on.
  */
@@ -115,11 +137,20 @@ export interface RequestRigState {
   type: "requestRigState";
 }
 /**
- * UI -> engine. Commits a new floor pedal signal order, e.g. after a drag-reorder or keyboard swap gesture. order must be exactly a permutation of the three PedalIds; the engine rejects (ignores) anything else and does not echo a rigState back for a rejected message. On success the engine applies the new order glitch-free (no audio dropout) and the new order round-trips back on the next rigState (including on a later requestRigState, and after DAW state restore).
+ * UI -> engine. Picks a new pedal (or empty, pedalType 0) for the given slot -- e.g. from the pedal palette. The engine resets that slot's on/P1-4 to their flat defaults (true/0.5/0.5/0.5/0.5), rebuilds the slot's DSP instance with a short click-free crossfade, and echoes a fresh rigState. slot/pedalType out of range is silently rejected -- no state change, no reply.
  */
-export interface SetChainOrder {
-  type: "setChainOrder";
-  order: ChainOrder;
+export interface SetSlotType {
+  type: "setSlotType";
+  slot: SlotIndex;
+  pedalType: PedalTypeId;
+}
+/**
+ * UI -> engine. Moves the pedal at slot `from` to slot `to`, e.g. after a drag-reorder or keyboard swap gesture. Every slot strictly between `from` and `to` shifts by one to close the gap (a standard array move over all 6 slots, including empty ones) -- only the affected slots' PARAMETER VALUES (type/on/P1-4) move; host automation lanes stay slot-positional. from == to is a harmless no-op. from/to out of range is silently rejected -- no state change, no reply. On success the engine echoes a fresh rigState (including on a later requestRigState, and after DAW state restore).
+ */
+export interface MovePedal {
+  type: "movePedal";
+  from: SlotIndex;
+  to: SlotIndex;
 }
 /**
  * UI -> engine. Load a .sgpreset file. path must be an absolute path inside the managed Presets library folder; the engine rejects anything else. Restores model/IR/chain order/params via the same code path as a DAW session restore. The engine responds with a presetResult followed by a fresh presetsState once the load completes (success or failure).
@@ -182,7 +213,7 @@ export interface ParamValueMap {
   [k: string]: NormalizedParamValue;
 }
 /**
- * Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any), the floor pedal chain order, and the managed library contents. Sent on page load, after any loadNamModel/loadIr/setChainOrder completes, and in reply to requestRigState.
+ * Engine -> UI. Full rig snapshot: currently loaded NAM model / IR (if any), the 6 pedal slots' type + on/off, and the managed library contents. Sent on page load, after any loadNamModel/loadIr/setSlotType/movePedal completes, and in reply to requestRigState.
  */
 export interface RigState {
   type: "rigState";
@@ -190,8 +221,19 @@ export interface RigState {
   namModelName: string | null;
   namModelSampleRate: number;
   irName: string | null;
-  chainOrder: ChainOrder;
+  /**
+   * @minItems 6
+   * @maxItems 6
+   */
+  slots: [SlotState, SlotState, SlotState, SlotState, SlotState, SlotState];
   library: RigLibrary;
+}
+/**
+ * One pedal slot's current occupant + on/off, as reported on rigState.slots. The slot's four knob values (P1-4) are ordinary ParamIds (slot{N}P1..P4), not repeated here.
+ */
+export interface SlotState {
+  type: PedalTypeId;
+  on: boolean;
 }
 /**
  * Contents of the managed library folders (Documents/Simple Guitar/Models, .../IRs), rescanned each time a rigState is produced.

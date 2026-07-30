@@ -20,6 +20,27 @@
   cursor: grabbing;
 }
 
+/* A freshly placed pedal settles onto the floor: same physical feel as the
+   reorder spring (one small overshoot, ~200ms ease-out, nothing cartoonish). */
+.pedal-slot--enter {
+  animation: pedal-slot-enter 200ms var(--camera-ease);
+}
+
+@keyframes pedal-slot-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .pedal-row-add {
   width: 120px;
   height: 96px;
@@ -32,4 +53,14 @@
   justify-content: center;
   color: #3c3c44;
   font-size: 18px;
+  cursor: pointer;
+  background: none;
+  transition: color var(--camera-duration) var(--camera-ease), border-color var(--camera-duration) var(--camera-ease);
+}
+
+.pedal-row-add:hover,
+.pedal-row-add:focus-visible {
+  color: #6a6a74;
+  border-color: #3a3a42;
+  outline: none;
 }

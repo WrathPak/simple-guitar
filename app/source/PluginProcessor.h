@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -15,50 +16,96 @@
 #include <sg/MeterTap.h>
 #include <sg/NamProcessor.h>
 #include <sg/NoiseGate.h>
-#include <sg/PlateReverb.h>
 #include <sg/PostEq.h>
-#include <sg/Screamer.h>
-#include <sg/StereoDelay.h>
 
-#include "ChainOrder.h"
+#include "PedalSlots.h"
 #include "PresetStore.h"
 #include "RigLibrary.h"
 
 /**
-    M2 rig processor: input trim -> NoiseGate -> [three floor pedals, in
-    chainOrder] -> NamProcessor -> PostEq -> IrLoader (cab) -> output gain ->
-    MeterTap.
+    M2 rig processor: input trim -> NoiseGate -> [6 generic pedal slots, in
+    slot-index order] -> NamProcessor -> PostEq -> IrLoader (cab) -> output
+    gain -> MeterTap.
 
     All engine setters are driven from APVTS atomics once per block (see
     processBlock()) -- the audio thread never touches the APVTS itself,
     only the cached std::atomic<float>* pointers obtained from
-    getRawParameterValue() at construction time. The three pedals' signal
-    order is a separate std::atomic<uint32_t> (see ChainOrder.h) read once
-    per block via sg::loadPedalOrder() -- reordering the floor is therefore
-    glitch-free and allocation-free, same realtime guarantee as every other
-    per-block parameter read here.
+    getRawParameterValue() at construction time.
+
+    Pedal slots (see PedalSlots.h for the runtime slot-hosting design): each
+    of the 6 slots is a generic {type, on, P1, P2, P3, P4} parameter group
+    (slot{N}Type/On/P1../P4, N = 0..5) rather than a fixed pedal. Slot index
+    IS signal order -- slot 0 runs right after the gate, slot 5 feeds the
+    NAM amp -- so there is no separate "chain order" concept anymore.
+    Reordering (movePedal()) permutes the SLOTS' PARAMETER VALUES on the
+    message thread via setValueNotifyingHost (type/on/P1-4 move together
+    with the pedal), so host automation lanes stay slot-positional; it never
+    touches the underlying DSP instances directly; the slot-type-change
+    machinery below picks up the resulting value changes and rebuilds
+    whichever slots actually changed type.
+
+    A slot's TYPE change never touches the audio thread: a new pedal
+    instance is built+prepared entirely on the message thread
+    (PedalSlotHost::swapSlot(), see PedalSlots.h), then atomically published;
+    the audio thread crossfades between the old and new instance over a
+    short (~10ms) window on its next few blocks (PedalSlotHost::processSlot()).
+    The just-retired instance is never deleted on the audio thread -- it's
+    held in retiringPedals (message-thread only) until a short grace period
+    has passed (collectRetiredPedals(), run from the same low-rate timer as
+    updateReportedLatency() below), mirroring sg::NamProcessor's own
+    loader-thread retire-then-delete pattern.
+
+    Slot-type changes can originate three ways, all funnelled through the
+    single applySlotTypeIfChanged() helper so the "detect a type change,
+    rebuild the instance" logic only exists once:
+      - setSlotType() (WebviewBridge's "setSlotType" message): a genuine
+        user pick of a new pedal for a slot -- additionally resets that
+        slot's On/P1-4 to their flat defaults (true/0.5), since a newly
+        chosen pedal's knobs starting at the previous occupant's values
+        rarely means anything. Applied synchronously (already message
+        thread, called directly from the bridge's event listener).
+      - movePedal() (WebviewBridge's "movePedal" message): does NOT reset
+        anything -- values travel with the pedal. Applied synchronously.
+      - The message-thread poll (timerCallback(), see updateReportedLatency's
+        own class-level reasoning for why this can't be a parameter
+        listener): backstops host automation writing directly to a
+        slot{N}Type parameter without going through either bridge message.
+        Deliberately does NOT reset On/P1-4 -- an automated type change is a
+        raw parameter write like any other, not a "pick a new pedal from the
+        palette" user gesture.
 
     NAM model / IR loading and the managed library scan happen on the
     message thread; see RigLibrary.h and WebviewBridge for the load/rigState
-    flow. The currently-loaded model/IR paths and the pedal chain order are
-    persisted as properties on the APVTS state tree (see
-    getStateInformation/setStateInformation) and restored on state load.
+    flow. The currently-loaded model/IR paths are persisted as properties on
+    the APVTS state tree (see getStateInformation/setStateInformation) and
+    restored on state load; the 36 slot params are ordinary APVTS parameters
+    and round-trip through the state tree on their own.
 
-    Screamer is the only pedal that reports nonzero latency
-    (getLatencySamples(), fixed once prepare() has run). Total plugin latency
-    (setLatencySamples()) must only ever be touched from the message thread
-    (JUCE's updateHostDisplay() plumbing behind it is not audio-thread-safe),
-    so it's recomputed from prepareToPlay() and from a low-rate message-thread
-    timer here (independent of whether an editor/WebviewBridge exists, so
-    latency compensation still works for a headless host or pluginval run
-    with no editor open) rather than from a parameter listener callback,
-    which JUCE may invoke from the audio thread for host automation.
+    Legacy state migration (see StateMigration.h): setStateInformation() and
+    loadPreset() both run every incoming state XML through
+    sg::migrateStateXmlIfNeeded() before apvts.replaceState() -- a state
+    saved before the slot rework (fixed screamer/echoes/chamber params plus
+    a chainOrder attribute) is transparently rewritten into the current
+    slot-param shape (chainOrder position i -> slot i; anything beyond the
+    old chain's 3 pedals comes out empty) before APVTS ever sees it. A
+    current-format state XML passes through unchanged.
+
+    Screamer-type slots are the only ones that report nonzero latency
+    (PedalInstance::getLatencySamples(), only meaningful once prepare() has
+    run). Total plugin latency (setLatencySamples()) must only ever be
+    touched from the message thread (JUCE's updateHostDisplay() plumbing
+    behind it is not audio-thread-safe), so it's recomputed from
+    prepareToPlay() and from a low-rate message-thread timer here
+    (independent of whether an editor/WebviewBridge exists, so latency
+    compensation still works for a headless host or pluginval run with no
+    editor open) rather than from a parameter listener callback, which JUCE
+    may invoke from the audio thread for host automation.
 
     Presets (see PresetStore.h and the preset-manager section below): a flat
     library of *.sgpreset files under Documents/Simple Guitar/Presets,
     save/load/next/prev all message-thread only. loadPreset() reuses
     setStateInformation's own restore path (apvts.replaceState() +
-    restoreLoadedPathsFromState()) so model/IR/chain order restore
+    restoreLoadedPathsFromState()) so model/IR/slot params restore
     identically whether the state came from a DAW session or a preset file.
     Dirty tracking can't rely on AudioProcessorValueTreeState parameter
     listeners for the same reason updateReportedLatency() above can't --
@@ -66,9 +113,11 @@
     "did any param change since the last save/load" is answered the same way
     latency is: a low-rate message-thread poll (see timerCallback()) that
     diffs every param's current normalized value against a baseline snapshot
-    taken at the last save/load. Model/IR-load and chain-reorder dirtying are
-    set directly at their own call sites instead (not on the poll), since
-    those aren't APVTS params.
+    taken at the last save/load. Model/IR-load and slot-type/reorder
+    dirtying are set directly at their own call sites instead (not on the
+    poll), since a type/reorder change to a *choice* param still shows up on
+    the generic per-param poll too, but the explicit set here makes it
+    immediate rather than waiting for the next poll tick.
 */
 class SimpleGuitarAudioProcessor final : public juce::AudioProcessor,
                                           private juce::Timer
@@ -117,21 +166,51 @@ public:
     static constexpr const char* cabOnParamId = "cabOn";
     static constexpr const char* cabLowCutHzParamId = "cabLowCutHz";
     static constexpr const char* cabHighCutHzParamId = "cabHighCutHz";
-    static constexpr const char* screamerOnParamId = "screamerOn";
-    static constexpr const char* screamerDriveParamId = "screamerDrive";
-    static constexpr const char* screamerToneParamId = "screamerTone";
-    static constexpr const char* screamerLevelParamId = "screamerLevel";
-    static constexpr const char* echoesOnParamId = "echoesOn";
-    static constexpr const char* echoesTimeParamId = "echoesTime";
-    static constexpr const char* echoesFeedbackParamId = "echoesFeedback";
-    static constexpr const char* echoesMixParamId = "echoesMix";
-    static constexpr const char* chamberOnParamId = "chamberOn";
-    static constexpr const char* chamberDecayParamId = "chamberDecay";
-    static constexpr const char* chamberToneParamId = "chamberTone";
-    static constexpr const char* chamberMixParamId = "chamberMix";
+
+    // Pedal slots: slot{N}Type/On/P1/P2/P3/P4 for N = 0..5 (36 ids total).
+    // slotTypeParamId(n)/slotOnParamId(n)/slotPParamId(n, p) below build
+    // these same ids at runtime (matches sg::slotParamId in PedalSlots.h);
+    // the named constants exist for the two callers (allParamIds and
+    // WebviewBridge) that want plain compile-time string literals.
+    static constexpr const char* slot0TypeParamId = "slot0Type";
+    static constexpr const char* slot0OnParamId = "slot0On";
+    static constexpr const char* slot0P1ParamId = "slot0P1";
+    static constexpr const char* slot0P2ParamId = "slot0P2";
+    static constexpr const char* slot0P3ParamId = "slot0P3";
+    static constexpr const char* slot0P4ParamId = "slot0P4";
+    static constexpr const char* slot1TypeParamId = "slot1Type";
+    static constexpr const char* slot1OnParamId = "slot1On";
+    static constexpr const char* slot1P1ParamId = "slot1P1";
+    static constexpr const char* slot1P2ParamId = "slot1P2";
+    static constexpr const char* slot1P3ParamId = "slot1P3";
+    static constexpr const char* slot1P4ParamId = "slot1P4";
+    static constexpr const char* slot2TypeParamId = "slot2Type";
+    static constexpr const char* slot2OnParamId = "slot2On";
+    static constexpr const char* slot2P1ParamId = "slot2P1";
+    static constexpr const char* slot2P2ParamId = "slot2P2";
+    static constexpr const char* slot2P3ParamId = "slot2P3";
+    static constexpr const char* slot2P4ParamId = "slot2P4";
+    static constexpr const char* slot3TypeParamId = "slot3Type";
+    static constexpr const char* slot3OnParamId = "slot3On";
+    static constexpr const char* slot3P1ParamId = "slot3P1";
+    static constexpr const char* slot3P2ParamId = "slot3P2";
+    static constexpr const char* slot3P3ParamId = "slot3P3";
+    static constexpr const char* slot3P4ParamId = "slot3P4";
+    static constexpr const char* slot4TypeParamId = "slot4Type";
+    static constexpr const char* slot4OnParamId = "slot4On";
+    static constexpr const char* slot4P1ParamId = "slot4P1";
+    static constexpr const char* slot4P2ParamId = "slot4P2";
+    static constexpr const char* slot4P3ParamId = "slot4P3";
+    static constexpr const char* slot4P4ParamId = "slot4P4";
+    static constexpr const char* slot5TypeParamId = "slot5Type";
+    static constexpr const char* slot5OnParamId = "slot5On";
+    static constexpr const char* slot5P1ParamId = "slot5P1";
+    static constexpr const char* slot5P2ParamId = "slot5P2";
+    static constexpr const char* slot5P3ParamId = "slot5P3";
+    static constexpr const char* slot5P4ParamId = "slot5P4";
 
     /** Every param id above, in a fixed, stable order shared with WebviewBridge. */
-    static constexpr int numParams = 24;
+    static constexpr int numParams = 12 + sg::numSlots * (2 + sg::numParamsPerSlot);
     static constexpr std::array<const char*, numParams> allParamIds { {
         outputGainParamId,
         gateOnParamId,
@@ -145,18 +224,12 @@ public:
         cabOnParamId,
         cabLowCutHzParamId,
         cabHighCutHzParamId,
-        screamerOnParamId,
-        screamerDriveParamId,
-        screamerToneParamId,
-        screamerLevelParamId,
-        echoesOnParamId,
-        echoesTimeParamId,
-        echoesFeedbackParamId,
-        echoesMixParamId,
-        chamberOnParamId,
-        chamberDecayParamId,
-        chamberToneParamId,
-        chamberMixParamId
+        slot0TypeParamId, slot0OnParamId, slot0P1ParamId, slot0P2ParamId, slot0P3ParamId, slot0P4ParamId,
+        slot1TypeParamId, slot1OnParamId, slot1P1ParamId, slot1P2ParamId, slot1P3ParamId, slot1P4ParamId,
+        slot2TypeParamId, slot2OnParamId, slot2P1ParamId, slot2P2ParamId, slot2P3ParamId, slot2P4ParamId,
+        slot3TypeParamId, slot3OnParamId, slot3P1ParamId, slot3P2ParamId, slot3P3ParamId, slot3P4ParamId,
+        slot4TypeParamId, slot4OnParamId, slot4P1ParamId, slot4P2ParamId, slot4P3ParamId, slot4P4ParamId,
+        slot5TypeParamId, slot5OnParamId, slot5P1ParamId, slot5P2ParamId, slot5P3ParamId, slot5P4ParamId,
     } };
 
     /** Read-only access to the post-chain meter tap, e.g. for a UI-side timer
@@ -183,30 +256,42 @@ public:
     void requestLoadIr (const juce::String& path, std::function<void (bool ok, juce::String errorOrName)> onDone);
 
     //==========================================================================
-    // Floor pedal chain order. See ChainOrder.h for the packing scheme; this
-    // is the single std::atomic<uint32_t> the audio thread reads once per
-    // block (processBlock()) to decide which pedal to run next -- glitch-free,
-    // allocation-free reordering.
+    // Pedal slots. See PedalSlots.h for the runtime slot-hosting design and
+    // the class-level comment above for the full setSlotType/movePedal
+    // threading story.
 
-    /** Thread-safe read of the current chain order (any thread). */
-    sg::PedalOrder getChainOrder() const noexcept { return sg::loadPedalOrder (chainOrderAtomic); }
+    /** Current raw type (0..6) of `slot`, read straight from the APVTS
+        param. Safe from any thread (atomic load); message-thread callers
+        (WebviewBridge's rigState) are the intended use. */
+    int getSlotType (int slot) const noexcept;
 
-    /** Validates (must be a permutation of the three pedal ids) and applies a
-        new chain order, and persists it onto apvts.state for state save/
-        restore. Message-thread only (touches apvts.state). Returns false
-        (no-op, nothing changed) if `order` isn't a valid permutation. */
-    bool setChainOrder (const sg::PedalOrder& order);
+    /** Current on/off of `slot`, read straight from the APVTS param. Safe
+        from any thread (atomic load). */
+    bool getSlotOn (int slot) const noexcept;
 
-    /** schema PedalId <-> sg::PedalSlot mapping, shared by PluginProcessor's
-        own state (de)serialization and WebviewBridge's rigState/setChainOrder
-        handling. */
-    static const char* pedalIdForSlot (sg::PedalSlot slot) noexcept;
-    static bool pedalSlotForId (juce::StringRef id, sg::PedalSlot& outSlot) noexcept;
+    /** Sets `slot`'s pedal type to `pedalType` (0..6) and resets that slot's
+        On/P1-4 to their flat defaults (true/0.5) -- a genuine "pick a new
+        pedal for this slot" user gesture (see class-level comment). Rebuilds
+        the slot's DSP instance immediately (message thread; may allocate).
+        Returns false (no-op) if `slot`/`pedalType` are out of range. */
+    bool setSlotType (int slot, int pedalType);
+
+    /** Moves the pedal at slot `from` to slot `to`: every slot strictly
+        between them shifts by one to close the gap (see
+        sg::computeMovePermutation()), and each affected slot's param VALUES
+        (type/on/P1-4) move together via setValueNotifyingHost -- host
+        automation lanes stay slot-positional, nothing about the underlying
+        DSP instances is touched directly (the resulting type-value changes
+        are picked up and rebuilt the same way any other type change is).
+        Message-thread only (may allocate, for any slot whose type actually
+        changed). Returns false (no-op) if `from`/`to` are out of range;
+        from == to is a harmless no-op that still returns true. */
+    bool movePedal (int from, int to);
 
     //==========================================================================
     // Presets. See PresetStore.h for the on-disk format and the class-level
     // comment above for the dirty-tracking design. Message-thread only --
-    // same rule as the NAM/IR loaders and setChainOrder above.
+    // same rule as the NAM/IR loaders and setSlotType/movePedal above.
 
     struct CurrentPreset
     {
@@ -222,10 +307,10 @@ public:
         currentPresetPath/currentPresetName properties). */
     std::optional<CurrentPreset> getCurrentPreset() const;
 
-    /** True if any APVTS param, the loaded model/IR, or the chain order has
-        changed since the last save/load (see the class-level comment for
-        how this is tracked). Safe to call from any thread (atomic load),
-        though only ever meaningfully written from the message thread. */
+    /** True if any APVTS param, or the loaded model/IR, has changed since
+        the last save/load (see the class-level comment for how this is
+        tracked). Safe to call from any thread (atomic load), though only
+        ever meaningfully written from the message thread. */
     bool isPresetDirty() const noexcept { return presetDirty.load (std::memory_order_relaxed); }
 
     /** Overwrites the current preset with the current rig state. False (no-op)
@@ -242,7 +327,7 @@ public:
 
     /** Loads the preset at `path` (must resolve inside the managed Presets
         folder) via the same restore path setStateInformation uses, so
-        model/IR/chain order restore identically to a DAW session load. */
+        model/IR/slot params restore identically to a DAW session load. */
     bool loadPreset (const juce::String& path, juce::String& outError);
 
     /** Steps to the next/previous preset (sorted by name) relative to the
@@ -257,12 +342,13 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    /** Kicks off the state-restore load requests and restores the chain
-        order (message thread). Called from setStateInformation (marshaled
-        via MessageManager::callAsync since the host may call
-        setStateInformation from other threads) and directly/synchronously
-        from loadPreset() (already guaranteed message-thread, so no marshal
-        needed there) -- the one shared restore path both go through. */
+    /** Kicks off the state-restore load requests and resyncs the pedal-slot
+        instances to the just-restored param values (message thread). Called
+        from setStateInformation (marshaled via MessageManager::callAsync
+        since the host may call setStateInformation from other threads) and
+        directly/synchronously from loadPreset() (already guaranteed
+        message-thread, so no marshal needed there) -- the one shared
+        restore path both go through. */
     void restoreLoadedPathsFromState();
 
     /** requestLoadNamModel/requestLoadIr's real implementation, with an
@@ -274,10 +360,29 @@ private:
     void requestLoadNamModelInternal (const juce::String& path, std::function<void (bool, juce::String)> onDone, bool isRestoring);
     void requestLoadIrInternal (const juce::String& path, std::function<void (bool, juce::String)> onDone, bool isRestoring);
 
-    /** Runs one pedal's atomic-driven setters + process() for the given
-        slot. Audio-thread only (called from processBlock() in the order
-        given by getChainOrder()). */
-    void processPedalSlot (sg::PedalSlot slot, juce::AudioBuffer<float>& buffer) noexcept;
+    /** Compares slot `slot`'s current raw type value against
+        lastKnownSlotType and, if different, rebuilds its DSP instance
+        (PedalSlotHost::swapSlot()) and queues the retired instance for
+        deferred deletion (see collectRetiredPedals()). Does NOT touch
+        On/P1-4 -- see the class-level comment on why setSlotType() resets
+        them itself but this shared helper doesn't. No-op (including doing
+        nothing to the slot host) if the slot host hasn't been prepared yet
+        -- prepareToPlay()'s own initial build already uses the current
+        param values, so there's nothing to rebuild before that. Message
+        thread only; may allocate. */
+    void applySlotTypeIfChanged (int slot);
+
+    /** Runs applySlotTypeIfChanged() over every slot -- the message-thread
+        poll's backstop for host automation writing a slot{N}Type param
+        directly (see timerCallback()), and also used right after a state
+        restore (restoreLoadedPathsFromState()) to resync every slot in one
+        call. Message thread only; may allocate. */
+    void syncAllSlotInstancesFromParams();
+
+    /** Deletes any retiringPedals entry whose grace period has elapsed.
+        Message-thread only (never the audio thread) -- run from the same
+        low-rate timer as updateReportedLatency() below. */
+    void collectRetiredPedals();
 
     /** Recomputes and (if changed) reports total plugin latency to the host
         via setLatencySamples(). Message-thread only -- see the class-level
@@ -305,39 +410,33 @@ private:
 
     void timerCallback() override;
 
-    // Property names used on apvts.state to persist the loaded model/IR path,
-    // the pedal chain order, and the current preset across
-    // getStateInformation/setStateInformation (DAW session save/load).
+    // Property names used on apvts.state to persist the loaded model/IR path
+    // and the current preset across getStateInformation/setStateInformation
+    // (DAW session save/load).
     static constexpr const char* namModelPathPropertyId = "namModelPath";
     static constexpr const char* irPathPropertyId = "irPath";
-    static constexpr const char* chainOrderPropertyId = "chainOrder";
     static constexpr const char* currentPresetPathPropertyId = "currentPresetPath";
     static constexpr const char* currentPresetNamePropertyId = "currentPresetName";
 
     /** How often the message-thread latency-refresh timer runs (see class
         comment): only needs to catch on/off toggles, not track anything
         per-frame, so a low rate is plenty. Also drives the dirty-tracking
-        poll (pollForDirtyParamChange()) -- same low-rate message-thread
+        poll (pollForDirtyParamChange()), the slot-type-change backstop poll
+        (syncAllSlotInstancesFromParams()), and the retired-pedal garbage
+        collection (collectRetiredPedals()) -- same low-rate message-thread
         cadence, same reasoning. */
     static constexpr int latencyRefreshHz = 15;
 
     //==========================================================================
-    // Engine chain: input trim -> gate -> [3 pedals, chainOrder] -> nam -> post eq -> cab -> output gain -> meter.
+    // Engine chain: input trim -> gate -> [6 pedal slots] -> nam -> post eq -> cab -> output gain -> meter.
     sg::Gain inputTrimGain;
     sg::NoiseGate gate;
-    sg::Screamer screamer;
-    sg::StereoDelay echoes;
-    sg::PlateReverb chamber;
+    sg::PedalSlotHost slotHost;
     sg::NamProcessor nam;
     sg::PostEq postEq;
     sg::IrLoader cab;
     sg::Gain outputGainStage;
     sg::MeterTap meterTap;
-
-    // Packed pedal order (see ChainOrder.h); starts at the fixed template
-    // order (screamer, echoes, chamber) and is restored from apvts.state on
-    // setStateInformation.
-    std::atomic<std::uint32_t> chainOrderAtomic { sg::packPedalOrder (sg::defaultPedalOrder()) };
 
     // Cached raw pointers into the APVTS parameters' atomic backing values.
     // Read on the audio thread via atomic load only -- processBlock() never
@@ -354,18 +453,54 @@ private:
     std::atomic<float>* cabOnParam = nullptr;
     std::atomic<float>* cabLowCutHzParam = nullptr;
     std::atomic<float>* cabHighCutHzParam = nullptr;
-    std::atomic<float>* screamerOnParam = nullptr;
-    std::atomic<float>* screamerDriveParam = nullptr;
-    std::atomic<float>* screamerToneParam = nullptr;
-    std::atomic<float>* screamerLevelParam = nullptr;
-    std::atomic<float>* echoesOnParam = nullptr;
-    std::atomic<float>* echoesTimeParam = nullptr;
-    std::atomic<float>* echoesFeedbackParam = nullptr;
-    std::atomic<float>* echoesMixParam = nullptr;
-    std::atomic<float>* chamberOnParam = nullptr;
-    std::atomic<float>* chamberDecayParam = nullptr;
-    std::atomic<float>* chamberToneParam = nullptr;
-    std::atomic<float>* chamberMixParam = nullptr;
+
+    // Slot params' cached atomics, one array entry per slot. slotTypeParams
+    // is read on the message thread only (type never drives the audio
+    // thread directly -- only a rebuilt DSP instance does); On/P1-4 are read
+    // every block on the audio thread (processBlock()).
+    std::array<std::atomic<float>*, sg::numSlots> slotTypeParams {};
+    std::array<std::atomic<float>*, sg::numSlots> slotOnParams {};
+    std::array<std::array<std::atomic<float>*, sg::numParamsPerSlot>, sg::numSlots> slotPParams {};
+
+    // Message-thread-only cache of each slot's last-seen raw type value, so
+    // applySlotTypeIfChanged() only rebuilds a slot whose type actually
+    // changed. Seeded to an invalid sentinel (-1) so the very first
+    // prepareToPlay() always treats every slot as "changed" is unnecessary
+    // in practice (prepare() itself builds directly from the current
+    // values), but syncAllSlotInstancesFromParams() before the slot host has
+    // ever been prepared is still a safe no-op either way.
+    std::array<int, sg::numSlots> lastKnownSlotType;
+
+    // True once prepareToPlay() has run at least once (slotHost.prepare()
+    // has therefore built every slot's initial instance). Guards
+    // applySlotTypeIfChanged() against trying to rebuild before there's
+    // anything to rebuild.
+    bool slotHostPrepared = false;
+
+    // Cached from the most recent prepareToPlay(), used by
+    // applySlotTypeIfChanged()/movePedal() to build a new slot instance at
+    // the right sample rate/block size/channel count. Deliberately cached
+    // explicitly here rather than read back from AudioProcessor::
+    // getSampleRate()/getBlockSize() (which JUCE only documents as valid
+    // "from processBlock()") -- same reasoning sg::NamProcessor::Impl caches
+    // its own sessionSampleRate/maxBlockSize rather than querying back.
+    double preparedSampleRate = 44100.0;
+    int preparedBlockSize = 512;
+    int preparedNumChannels = 2;
+
+    // Pedal instances retired by a slot-type swap, held here (message-thread
+    // only) until a short grace period has passed -- mirrors
+    // sg::NamProcessor's own loader-thread retire-then-delete pattern (see
+    // engine/src/NamProcessor.cpp), just driven by the message-thread timer
+    // instead of a dedicated background thread. Never touched by, or
+    // deleted on, the audio thread.
+    struct RetiringPedal
+    {
+        std::unique_ptr<sg::PedalInstance> pedal;
+        juce::uint32 retiredAtMs = 0;
+    };
+    std::vector<RetiringPedal> retiringPedals;
+    static constexpr juce::uint32 retireGraceMs = 250; // matches sg::NamProcessor::Impl::kRetireGraceSeconds
 
     // Message-thread-only bookkeeping of the currently-loaded paths, mirrored
     // onto apvts.state properties so they round-trip through getState/setState.
@@ -379,8 +514,8 @@ private:
     juce::String currentPresetPath;
 
     // Dirty tracking (see the class-level comment). Set true directly at the
-    // model/IR-load and chain-reorder call sites; set true for a plain
-    // param change by pollForDirtyParamChange() diffing against
+    // model/IR-load and setSlotType/movePedal call sites; set true for a
+    // plain param change by pollForDirtyParamChange() diffing against
     // dirtyBaselineValues. Cleared (along with a fresh baseline snapshot) by
     // refreshDirtyBaseline() on construction and after every successful
     // save/load. presetDirty is atomic since WebviewBridge (a different
